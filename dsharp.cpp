@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <string>
 #include <sstream>
+#include <fstream>
 #include <stdarg.h>
 
 //
@@ -92,6 +93,12 @@ struct String {
 
 		return c;
 	}
+
+  void free() {
+    ::free(data);
+    size = 0;
+    data = nullptr;
+  }
 
 	bool operator==(const String& other) const {
 		return size == other.size && memcmp(data, other.data, size) == 0;
@@ -996,8 +1003,27 @@ struct Tokenizer {
 //
 //
 
+Result<String> read_entire_file(const char *path) {
+  std::ifstream file(path, std::ios::binary | std::ios::ate);
+  verify(file.is_open(), "'%s' could not be opened.", path);
+  
+  std::streamsize size = file.tellg();
+  file.seekg(0, std::ios::beg);
+  
+  auto source = String { static_cast<size_t>(size), reinterpret_cast<char *>(malloc(size)) };
+  file.read(source.data, size);
+  verify(file.good(), "Could not read from '%s'.", path);
+  
+  return source;
+}
+
 int main(int argc, const char **argv) {
-	String source = const_cast<char *>("a + 1.3");
+  if (argc <= 1) {
+    std::cerr << "Please provide source file to compile." << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  String source = read_entire_file(argv[1]).unwrap();
 
 	Tokenizer tokenizer;
 	tokenizer.source = source;
@@ -1006,6 +1032,8 @@ int main(int argc, const char **argv) {
 	Token t2 = tokenizer.next().unwrap();
 	Token t3 = tokenizer.next().unwrap();
 	Token t4 = tokenizer.next().unwrap();
+
+  source.free();
 
 	{
 		std::cout << Color::Cyan << "t1:" << Color::Reset << std::endl;

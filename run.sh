@@ -1,2 +1,2 @@
 ./build.sh;
-./dsharp
+./dsharp $1
