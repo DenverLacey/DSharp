@@ -133,40 +133,109 @@ struct Code_Location {
 //
 //
 
-[[noreturn]]
-void error(const char *err, va_list args) {
-  fprintf(stderr, "%sError: ", Color::Red);
-  vfprintf(stderr, err, args);
-  fprintf(stderr, "%s\n", Color::Reset);
+template<typename Ok>
+struct Result {
+  bool is_ok;
+  union {
+    Ok ok;
+    std::string err;
+  };
 
+  Result(const Ok& ok) : is_ok(true) {
+    this->ok = ok;
+  }
+
+  Result(std::string err) : is_ok(false) {
+    this->err = std::move(err);
+  }
+
+  ~Result() {
+    if (!is_ok) {
+      typedef std::string str_t;
+      err.~str_t();
+    }
+  }
+
+  Ok unwrap() {
+    if (!is_ok) {
+      std::cerr << err;
+      exit(EXIT_FAILURE);
+    }
+    return ok;
+  }
+};
+
+template<>
+struct Result<void> {
+  bool is_ok;
+  std::string err;
+
+  Result() : is_ok(true) { }
+
+  Result(std::string err) : is_ok(false) {
+    this->err = std::move(err);
+  }
+
+  void unwrap() {
+    if (!is_ok) {
+      std::cerr << err;
+      exit(EXIT_FAILURE);
+    }
+  }
+};
+
+#define try_(expression) ({\
+  auto result = expression;\
+  if (!result.is_ok) return { std::move(result.err) };\
+  result.ok;\
+})
+
+#define error(...) ({\
+  auto result = error_impl(__VA_ARGS__);\
+  assert(!result.is_ok);\
+  return { std::move(result.err) };\
+})
+
+Result<void> error_impl(const char *err, va_list args) {
+  std::stringstream s;
+
+  char *message;
+  vasprintf(&message, err, args);
+
+  s << Color::Red << "Error: " << message << Color::Reset << std::endl;
+
+  free(message);
   va_end(args);
-  exit(EXIT_FAILURE);
+
+  return { s.str() };
 }
 
-[[noreturn]]
-void error(const char *err, ...) {
+Result<void> error_impl(const char *err, ...) {
   va_list args;
   va_start(args, err);
 
-  error(err, args);
+  return error_impl(err, args);
 }
 
-[[noreturn]]
-void error(Code_Location location, const char *err, va_list args) {
-  fprintf(stderr, "%sError @ %s: ", Color::Red, location.debug_str().c_str());
-  vfprintf(stderr, err, args);
-  fprintf(stderr, "%s\n", Color::Reset);
+Result<void> error_impl(Code_Location location, const char *err, va_list args) {
+  std::stringstream s;
 
+  char *message;
+  vasprintf(&message, err, args);
+
+  s << Color::Red << "Error @ " << location.debug_str() << ": " << message << Color::Reset << std::endl;
+
+  free(message);
   va_end(args);
-  exit(EXIT_FAILURE);
+
+  return { s.str() };
 }
 
-[[noreturn]]
-void error(Code_Location location, const char *err, ...) {
+Result<void> error_impl(Code_Location location, const char *err, ...) {
   va_list args;
   va_start(args, err);
 
-  error(location, err, args);
+  return error_impl(location, err, args);
 }
 
 #define verify(condition, ...) if (!(condition)) error(__VA_ARGS__)
@@ -721,15 +790,15 @@ struct Tokenizer {
 		return c;
 	}
 
-	Token peek() {
+	Result<Token> peek() {
 		if (peeked_token.has_value()) {
 			return peeked_token.value();
 		}
-		peeked_token = next();
+		peeked_token = try_(next());
 		return peeked_token.value();
 	}
 
-	Token next() {
+	Result<Token> next() {
 		if (peeked_token.has_value()) {
 			previous_token = peeked_token.value();
 			peeked_token = {};
@@ -748,7 +817,7 @@ struct Tokenizer {
 			previous_token = make_token(Token_Kind::Delimeter_Newline);
 			line++;
 		} else if (c == '\'') {
-			previous_token = next_character_token();
+			previous_token = try_(next_character_token());
 		} else if (c == '\"') {
 			previous_token = next_string_token();
 		} else if (isdigit(c) || (c == '.' && isdigit(peek_char(1)))) {
@@ -756,21 +825,23 @@ struct Tokenizer {
 		} else if (isalpha(c) || (c == '_' && is_identifier_character(peek_char(1)))) {
 			previous_token = next_keyword_or_identifier_token();
 		} else {
-			previous_token = next_punctuation_token(c);
+			previous_token = try_(next_punctuation_token(c));
 		}
 
 		return previous_token;
 	}
 
-	Token next_character_token() {
+	Result<Token> next_character_token() {
 		char32_t character = next_char();
 
     // @TODO:
     // :HandleUTF8
     //
 		verify(isalnum(character) || ispunct(character) || isspace(character), current_location(), "Invalid character in character literal `%c`.", character);
+
 		verify(next_char() == '\'', current_location(), "Expected a single-quote `'`' to terminate character literal.");
-		return make_token(
+		
+    return make_token(
 			Token_Kind::Literal_Character, 
 			Token_Data { 
 				.character = character 
@@ -830,8 +901,6 @@ struct Tokenizer {
 		char *word = reinterpret_cast<char *>(alloca(size));
 		memcpy(word, start, size);
 
-    printf("word=%s\n", word);
-
     Token token;
 
     if (is_floating_point) {
@@ -881,7 +950,7 @@ struct Tokenizer {
 		return token;
 	}
 
-	Token next_punctuation_token(char32_t c) {
+	Result<Token> next_punctuation_token(char32_t c) {
 		Token token;
 
 		switch (c) {
@@ -933,10 +1002,10 @@ int main(int argc, const char **argv) {
 	Tokenizer tokenizer;
 	tokenizer.source = source;
 
-	Token t1 = tokenizer.next();
-	Token t2 = tokenizer.next();
-	Token t3 = tokenizer.next();
-	Token t4 = tokenizer.next();  
+	Token t1 = tokenizer.next().unwrap();
+	Token t2 = tokenizer.next().unwrap();
+	Token t3 = tokenizer.next().unwrap();
+	Token t4 = tokenizer.next().unwrap();
 
 	{
 		std::cout << Color::Cyan << "t1:" << Color::Reset << std::endl;
