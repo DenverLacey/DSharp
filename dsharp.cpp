@@ -2,6 +2,8 @@
 #include <optional>
 #include <assert.h>
 #include <string>
+#include <variant>
+#include <vector>
 #include <sstream>
 #include <fstream>
 #include <stdarg.h>
@@ -59,12 +61,6 @@ std::string debug_str(const std::optional<T>& option) {
   }
 
   return s.str();
-}
-
-template<typename T>
-void destruct(const T& x) {
-  typedef T destructor;
-  x.~destructor();
 }
 
 //
@@ -147,65 +143,77 @@ struct Code_Location {
 //
 
 template<typename Ok>
-struct Result {
-  bool is_ok;
-  union {
-    Ok ok;
-    std::string err;
-  };
+class Result {
+  std::variant<Ok, std::string> repr;
 
-  Result(const Ok& ok) : is_ok(true) {
-    this->ok = ok;
+public:
+  Result(const Ok& ok) {
+    repr = ok;
   }
 
-  Result(std::string err) : is_ok(false) {
-    this->err = std::move(err);
-  }
-
-  ~Result() {
-    if (!is_ok) {
-      destruct(err);
-    }
+  Result(std::string err) {
+    repr = std::move(err);
   }
 
   Ok unwrap() {
-    if (!is_ok) {
-      std::cerr << err;
+    if (std::holds_alternative<std::string>(repr)) {
+      std::cerr << std::get<std::string>(repr);
       exit(EXIT_FAILURE);
     }
-    return ok;
+    return std::get<Ok>(repr);
+  }
+
+  bool is_ok() {
+    return std::holds_alternative<Ok>(repr);
+  }
+
+  Ok ok() {
+    return std::get<Ok>(repr);
+  }
+
+  const std::string& err() {
+    return std::get<std::string>(repr);
   }
 };
 
 template<>
-struct Result<void> {
-  bool is_ok;
-  std::string err;
+class Result<void> {
+  bool _is_ok;
+  std::string _err;
 
-  Result() : is_ok(true) { }
+public:
+  Result() : _is_ok(true) { }
 
-  Result(std::string err) : is_ok(false) {
-    this->err = std::move(err);
+  Result(std::string err) : _is_ok(false) {
+    _err = std::move(err);
   }
 
   void unwrap() {
-    if (!is_ok) {
-      std::cerr << err;
+    if (!_is_ok) {
+      std::cerr << _err;
       exit(EXIT_FAILURE);
     }
+  }
+
+  bool is_ok() {
+    return _is_ok;
+  }
+
+  const std::string& err() {
+    return _err;
   }
 };
 
 #define try_(expression) ({\
   auto result = expression;\
-  if (!result.is_ok) return { std::move(result.err) };\
-  result.ok;\
+  if (!result.is_ok()) return { std::move(result.err()) };\
+  result.ok();\
 })
 
 #define error(...) ({\
   auto result = error_impl(__VA_ARGS__);\
-  assert(!result.is_ok);\
-  return { std::move(result.err) };\
+  assert(!result.is_ok());\
+  return { std::move(result.err()) };\
 })
 
 Result<void> error_impl(const char *err, va_list args) {
@@ -372,6 +380,10 @@ enum class AST_Kind {
 
   Binary_Assignment,
   Binary_Add,
+
+  Block,
+
+  If,
 };
 
 const char *debug_str(AST_Kind kind) {
@@ -385,7 +397,10 @@ const char *debug_str(AST_Kind kind) {
     CASE(Literal_Integer);
     CASE(Literal_Floating_Point);
     CASE(Unary);
+    CASE(Binary_Assignment);
     CASE(Binary_Add);
+    CASE(Block);
+    CASE(If);
 
     default:
       internal_error("Invalid AST_Kind: %d!", kind);
@@ -417,6 +432,7 @@ protected:
 
   void print_unary(const struct AST_Unary *unary, size_t indentation) const;
   void print_binary(const struct AST_Binary *binary, size_t indentation) const;
+  void print_block(const struct AST_Block *block, size_t indentation) const;
 };
 
 struct AST_Symbol : AST {
@@ -442,7 +458,38 @@ struct AST_Binary : AST {
   AST *rhs;
 };
 
+struct AST_Block : AST {
+  std::vector<AST *> nodes;
+};
+
+struct AST_If : AST {
+  AST *condition;
+  AST *then_block;
+  AST *else_block;
+};
+
 void AST::debug_print(size_t indentation) const {
+  #define CASE_UNARY(kind, name) case AST_Kind::kind: {\
+    const AST_Unary *self = dynamic_cast<const AST_Unary *>(this);\
+    internal_verify(self, "Failed to cast to `const AST_Unary *`");\
+    printf("`" name "`:\n");\
+    print_unary(self, indentation);\
+  } break
+  
+  #define CASE_BINARY(kind, name) case AST_Kind::kind: {\
+    const AST_Binary *self = dynamic_cast<const AST_Binary *>(this);\
+    internal_verify(self, "Faield to cast to `const AST_Binary *`");\
+    printf("`" name "`:\n");\
+    print_binary(self, indentation);\
+  } break
+
+  #define CASE_BLOCK(kind, name) case AST_Kind::kind: {\
+    const AST_Block *self = dynamic_cast<const AST_Block *>(this);\
+    internal_verify(self, "Failed to cast to `const AST_Block *`");\
+    printf("`" name "`:\n");\
+    print_block(self, indentation);\
+  } break
+
   switch (kind) {
     case AST_Kind::Symbol_Identifier: {
       const AST_Symbol *self = dynamic_cast<const AST_Symbol *>(this);
@@ -514,24 +561,32 @@ void AST::debug_print(size_t indentation) const {
         self->as.floating_point
       );
     } break;
-    case AST_Kind::Unary: {
-      const AST_Unary *self = dynamic_cast<const AST_Unary *>(this);
-      internal_verify(self, "Failed to cast to `const AST_Unary *`");
 
-      printf("Unary:\n");
-      print_unary(self, indentation);
+    CASE_UNARY(Unary, "Unary");
+    
+    CASE_BINARY(Binary_Assignment, "=");
+    CASE_BINARY(Binary_Add, "+");
+
+    CASE_BLOCK(Block, "{}");
+
+    case AST_Kind::If: {
+      const AST_If *self = dynamic_cast<const AST_If *>(this);
+      internal_verify(self, "Failed to cast to `const AST_If *`");
+
+      printf("`if`:\n");
+      print_base_members(indentation);
+
+      print_member("condition", indentation, self->condition);
+      print_member("then", indentation, self->then_block);
+      if (self->else_block) print_member("else", indentation, self->else_block);
     } break;
-    case AST_Kind::Binary_Add: {
-      const AST_Binary *self = dynamic_cast<const AST_Binary *>(this);
-      internal_verify(self, "Failed to cast to `const AST_Binary *`");
-
-      printf("`+`:\n");
-      print_binary(self, indentation);
-    } break;
-
+    
     default:
       internal_error("Invalid AST_Kind: %d!", kind);
   }
+
+  #undef CASE_UNARY
+  #undef CASE_BINARY
 }
 
 void AST::print_unary(const AST_Unary *unary, size_t indentation) const {
@@ -543,6 +598,18 @@ void AST::print_binary(const AST_Binary *binary, size_t indentation) const {
   print_base_members(indentation);
   print_member("lhs", indentation, binary->lhs);
   print_member("rhs", indentation, binary->rhs);
+}
+
+void AST::print_block(const AST_Block *block, size_t indentation) const {
+  print_base_members(indentation);
+
+  for (size_t i = 0; i < block->nodes.size(); i++) {
+    printf("%*s%zu: ", 
+      static_cast<int>(Print_Indentation_Size * (indentation + 1)), "",
+      i
+    );
+    block->nodes[i]->debug_print(indentation + 1);
+  }
 }
 
 //
@@ -629,6 +696,8 @@ enum class Token_Kind {
 	Delimeter_Semicolon,
 	Delimeter_Left_Parenthesis,
 	Delimeter_Right_Parenthesis,
+  Delimeter_Left_Curly,
+  Delimeter_Right_Curly,
 
 	// punctuation
 	Punctuation_Equal,
@@ -639,6 +708,8 @@ enum class Token_Kind {
 	Punctuation_Slash,
 
 	// keywords
+  Keyword_If,
+  Keyword_Else,
 };
 
 const char *debug_str(Token_Kind kind) {
@@ -665,6 +736,8 @@ const char *debug_str(Token_Kind kind) {
 	  CASE(Delimeter_Semicolon);
 	  CASE(Delimeter_Left_Parenthesis);
 	  CASE(Delimeter_Right_Parenthesis);
+    CASE(Delimeter_Left_Curly);
+	  CASE(Delimeter_Right_Curly);
 
 	  // punctuation
 	  CASE(Punctuation_Equal);
@@ -720,6 +793,8 @@ struct Token {
 	    CASE(Delimeter_Semicolon, None);
 	    CASE(Delimeter_Left_Parenthesis, Call);
 	    CASE(Delimeter_Right_Parenthesis, None);
+      CASE(Delimeter_Left_Curly, None);
+	    CASE(Delimeter_Right_Curly, None);
 
 	    // punctuation
 	    CASE(Punctuation_Equal, Assignment);
@@ -730,6 +805,8 @@ struct Token {
 	    CASE(Punctuation_Slash, Factor);
 
 	    // keywords
+      CASE(Keyword_If, None);
+      CASE(Keyword_Else, None);
 
       default:
         internal_error("Invalid Token_Kind: %d!", kind);
@@ -789,11 +866,9 @@ struct Tokenizer {
 	}
 
 	char32_t skip_to_begining_of_next_token() {
-		char c = peek_char();
+		char c = next_char();
 
 		while (is_whitespace(c)) {
-			c = next_char();
-
 			if (c == '/' && peek_char(1) == '/') {
 				while (c != '\n') {
 					c = next_char();
@@ -804,8 +879,11 @@ struct Tokenizer {
 				while (c == '\n') {
 					c = next_char();
 					line++;
+          coloumn = 0;
 				}
 			}
+
+			c = next_char();
 		}
 
 		return c;
@@ -837,13 +915,14 @@ struct Tokenizer {
 		} else if (c == '\n') {
 			previous_token = make_token(Token_Kind::Delimeter_Newline);
 			line++;
+      coloumn = 0;
 		} else if (c == '\'') {
 			previous_token = try_(next_character_token());
 		} else if (c == '\"') {
 			previous_token = next_string_token();
-		} else if (isdigit(c) || (c == '.' && isdigit(peek_char(1)))) {
+		} else if (isdigit(c) || (c == '.' && isdigit(peek_char()))) {
 			previous_token = next_number_token();
-		} else if (isalpha(c) || (c == '_' && is_identifier_character(peek_char(1)))) {
+		} else if (isalpha(c) || (c == '_' && is_identifier_character(peek_char()))) {
 			previous_token = next_keyword_or_identifier_token();
 		} else {
 			previous_token = try_(next_punctuation_token(c));
@@ -946,7 +1025,10 @@ struct Tokenizer {
 	}
 
 	Token next_keyword_or_identifier_token() {
-		auto word = String { 0, source.data };
+    // @HACK:
+    // `source.data - 1` because we moved passed the first character in the symbol.
+    //
+		auto word = String { 1, source.data - 1 };
 
 		while (is_identifier_character(peek_char())) {
 			word.size++;
@@ -954,12 +1036,27 @@ struct Tokenizer {
 		}
 
 		Token token;
-		if (false) {
-			// @TODO:
-			// check if `word` is a keyword
-			//
-			todo("Keywords not implemented!");
-		} else {
+    if (word == "null") {
+      token = make_token(Token_Kind::Literal_Null);
+    } else if (word == "true") {
+        token = make_token(
+          Token_Kind::Literal_Boolean,
+          Token_Data {
+            .boolean = true
+          }
+        );
+    } else if (word == "false") {
+      token = make_token(
+          Token_Kind::Literal_Boolean,
+          Token_Data {
+            .boolean = false
+          }
+        );
+    } else if (word == "if") {
+      token = make_token(Token_Kind::Keyword_If);
+		} else if (word == "else") {
+      token = make_token(Token_Kind::Keyword_Else);
+    } else {
 			token = make_token(
 				Token_Kind::Symbol_Identifier,
 				Token_Data {
@@ -984,6 +1081,12 @@ struct Tokenizer {
 			case ')': {
 				token = make_token(Token_Kind::Delimeter_Right_Parenthesis);
 			} break;
+      case '{': {
+        token = make_token(Token_Kind::Delimeter_Left_Curly);
+      } break;
+      case '}': {
+        token = make_token(Token_Kind::Delimeter_Right_Curly);
+      } break;
 			case '=': {
 				token = make_token(Token_Kind::Punctuation_Equal);
 			} break;
@@ -1021,6 +1124,11 @@ struct Parser {
     return tokenizer.peek().unwrap().kind == kind;
   }
 
+  bool skip_check(Token_Kind kind) {
+    skip_newlines();
+    return check(kind);
+  }
+
   // @NOTE: See above!
   //
   bool match(Token_Kind kind) {
@@ -1031,18 +1139,55 @@ struct Parser {
     return false;
   }
 
-  Result<Token> expect(Token_Kind kind, const char *err, ...) {
-    auto t = try_(tokenizer.next());
+  bool skip_match(Token_Kind kind) {
+    skip_newlines();
+    return match(kind);
+  }
 
+  Result<Token> expect(Token_Kind kind, const char *err, ...) {
     va_list args;
     va_start(args, err);
+    return expect(kind, err, args);
+  }
+
+  Result<Token> expect(Token_Kind kind, const char *err, va_list args) {
+    auto t = try_(tokenizer.next());
     verify(t.kind == kind, t.location, err, args);
 
+    va_end(args);
     return t;
   }
 
+  Result<Token> skip_expect(Token_Kind kind, const char *err, ...) {
+    va_list args;
+    va_start(args, err);
+
+    skip_newlines();
+    return expect(kind, err, args);
+  }
+
+  Result<Token> expect_statement_terminator(const char *err, ...) {
+    va_list args;
+    va_start(args, err);
+
+    auto t = try_(tokenizer.next());
+    verify(
+      t.kind == Token_Kind::Delimeter_Newline || t.kind == Token_Kind::Delimeter_Semicolon || t.kind == Token_Kind::Eof,
+      t.location, 
+      err, 
+      args
+    );
+    
+    va_end(args);
+    return t;
+  }
+
+  void skip_newlines() {
+    while (match(Token_Kind::Delimeter_Newline)) {}
+  }
+
   Result<AST *> parse_declaration() {
-    AST *node;
+    AST *node = nullptr;
     
     if (false) {
       todo("This is where declaration parsing functions will go.");
@@ -1054,13 +1199,43 @@ struct Parser {
   }
 
   Result<AST *> parse_statement() {
-    AST *node;
+    AST *node = nullptr;
 
-    if (false) {
-      todo("This is where statement parsing functions will go.");
+    if (match(Token_Kind::Delimeter_Left_Curly)) {
+      node = try_(parse_block());
+    } else if (match(Token_Kind::Keyword_If)) {
+      node = try_(parse_if_statement());
     } else {
       node = try_(parse_expression_or_assignment());
+      try_(expect_statement_terminator("Expected end of statement!"));
     }
+
+    return node;
+  }
+
+  Result<AST_If *> parse_if_statement() {
+    auto condition = try_(parse_expression());
+    skip_newlines();
+
+    try_(skip_expect(Token_Kind::Delimeter_Left_Curly, "Expected `{` after condition expression in `if` statement!"));
+    auto then_block = try_(parse_block());
+
+    AST *else_block = nullptr;
+    if (skip_match(Token_Kind::Keyword_Else)) {
+      if (skip_match(Token_Kind::Keyword_If)) {
+        else_block = try_(parse_if_statement());
+      } else {
+        try_(skip_expect(Token_Kind::Delimeter_Left_Curly, "Expected `{` or `if` after `else`!"));
+        else_block = try_(parse_block());
+      }
+    }
+
+    AST_If *node = new AST_If;
+    node->kind = AST_Kind::If;
+    node->location = then_block->location;
+    node->condition = condition;
+    node->then_block = then_block;
+    node->else_block = else_block;
 
     return node;
   }
@@ -1092,7 +1267,7 @@ struct Parser {
   }
 
   Result<AST *> parse_prefix(Token token) {
-    AST *node;
+    AST *node = nullptr;
 
     switch (token.kind) {
       case Token_Kind::Symbol_Identifier: {
@@ -1163,11 +1338,14 @@ struct Parser {
   }
 
   Result<AST *> parse_infix(Token token, AST *previous) {
-    AST *node;
+    AST *node = nullptr;
     auto precedence = token.precedence();
     auto location = token.location;
 
     switch (token.kind) {
+      case Token_Kind::Punctuation_Equal:
+        node = try_(parse_binary(AST_Kind::Binary_Assignment, precedence, previous, location));
+        break;
       case Token_Kind::Punctuation_Plus:
         node = try_(parse_binary(AST_Kind::Binary_Add, precedence, previous, location));
         break;
@@ -1213,6 +1391,24 @@ struct Parser {
 
     return binary;
   }
+
+  Result<AST_Block *> parse_block() {
+    auto block = new AST_Block;
+    block->kind = AST_Kind::Block;
+
+    while (true) {
+      skip_newlines();
+      if (check(Token_Kind::Delimeter_Right_Curly) || check(Token_Kind::Eof)) break;
+
+      auto node = try_(parse_declaration());
+      block->nodes.push_back(node);
+    }
+
+    auto right_curly = try_(skip_expect(Token_Kind::Delimeter_Right_Curly, "Expected `}` to terminate block!"));
+    block->location = right_curly.location;
+
+    return block;
+  }
 };
 
 AST *parse(String source, const char *filename) {
@@ -1220,12 +1416,15 @@ AST *parse(String source, const char *filename) {
   p.tokenizer.source = source;
   p.tokenizer.filename = filename;
 
-  while (!p.check(Token_Kind::Eof)) {
+  while (true) {
+    p.skip_newlines();
+    if (p.check(Token_Kind::Eof)) break;
+
     auto result = p.parse_declaration();
-    if (!result.is_ok) {
-      std::cerr << result.err;
+    if (!result.is_ok()) {
+      std::cerr << result.err();
     } else {
-      auto node = result.ok;
+      auto node = result.ok();
       node->debug_print();
     }
   }
