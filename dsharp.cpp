@@ -742,6 +742,7 @@ struct Token {
 struct Tokenizer {
 	size_t line = 0;
 	size_t coloumn = 0;
+  const char *filename;
 	String source;
 	Token previous_token;
 	std::optional<Token> peeked_token;
@@ -767,7 +768,7 @@ struct Tokenizer {
 		return Code_Location {
 			line,
 			coloumn,
-			"<@TODO: FILENAME>"
+      filename,
 		};
 	}
 
@@ -1214,9 +1215,10 @@ struct Parser {
   }
 };
 
-AST *parse(String source) {
+AST *parse(String source, const char *filename) {
   Parser p;
   p.tokenizer.source = source;
+  p.tokenizer.filename = filename;
 
   while (!p.check(Token_Kind::Eof)) {
     auto result = p.parse_declaration();
@@ -1258,7 +1260,7 @@ int main(int argc, const char **argv) {
   }
 
   String source = read_entire_file(argv[1]).unwrap();
-  parse(source);
+  parse(source, argv[1]);
 
   source.free();
 	return 0;
