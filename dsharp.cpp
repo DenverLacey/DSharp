@@ -167,6 +167,10 @@ public:
     return std::holds_alternative<Ok>(repr);
   }
 
+  bool is_err() {
+    return std::holds_alternative<std::string>(repr);
+  }
+
   Ok ok() {
     return std::get<Ok>(repr);
   }
@@ -199,6 +203,10 @@ public:
     return _is_ok;
   }
 
+  bool is_err() {
+    return !_is_ok;
+  }
+
   const std::string& err() {
     return _err;
   }
@@ -206,13 +214,13 @@ public:
 
 #define try_(expression) ({\
   auto result = expression;\
-  if (!result.is_ok()) return { std::move(result.err()) };\
+  if (result.is_err()) return { std::move(result.err()) };\
   result.ok();\
 })
 
 #define error(...) ({\
   auto result = error_impl(__VA_ARGS__);\
-  assert(!result.is_ok());\
+  assert(result.is_err());\
   return { std::move(result.err()) };\
 })
 
@@ -353,7 +361,8 @@ struct Type {
       } break;
 
       default:
-        internal_error("Invalid Type_Kind: %d!", kind);
+        s = std::to_string(static_cast<int>(kind));
+        break;
     }
 
     return s;
@@ -378,6 +387,9 @@ enum class AST_Kind {
 
   Unary,
 
+  Binary_Variable_Instantiation,
+  Binary_Constant_Instantiation,
+  Binary_Variable_Declaration,
   Binary_Assignment,
   Binary_Add,
 
@@ -386,7 +398,7 @@ enum class AST_Kind {
   If,
 };
 
-const char *debug_str(AST_Kind kind) {
+std::string debug_str(AST_Kind kind) {
   #define CASE(kind) case AST_Kind::kind: return #kind
 
   switch (kind) {
@@ -397,13 +409,16 @@ const char *debug_str(AST_Kind kind) {
     CASE(Literal_Integer);
     CASE(Literal_Floating_Point);
     CASE(Unary);
+    CASE(Binary_Variable_Instantiation);
+    CASE(Binary_Constant_Instantiation);
+    CASE(Binary_Variable_Declaration);
     CASE(Binary_Assignment);
     CASE(Binary_Add);
     CASE(Block);
     CASE(If);
 
     default:
-      internal_error("Invalid AST_Kind: %d!", kind);
+      return std::to_string(static_cast<int>(kind));
   }
 
   #undef CASE
@@ -420,7 +435,7 @@ struct AST {
 
 protected:
   void print_base_members(size_t indentation) const {
-    printf("%*skind: %s\n", static_cast<int>(Print_Indentation_Size * (indentation + 1)), "", debug_str(kind));
+    printf("%*skind: %s\n", static_cast<int>(Print_Indentation_Size * (indentation + 1)), "", debug_str(kind).c_str());
     printf("%*stype: %s\n", static_cast<int>(Print_Indentation_Size * (indentation + 1)), "", debug_str(type).c_str());
     printf("%*slocation: %s\n", static_cast<int>(Print_Indentation_Size * (indentation + 1)), "", location.debug_str().c_str());
   }
@@ -564,6 +579,9 @@ void AST::debug_print(size_t indentation) const {
 
     CASE_UNARY(Unary, "Unary");
     
+    CASE_BINARY(Binary_Variable_Instantiation, ":=");
+    CASE_BINARY(Binary_Constant_Instantiation, "::");
+    CASE_BINARY(Binary_Variable_Declaration, ":");
     CASE_BINARY(Binary_Assignment, "=");
     CASE_BINARY(Binary_Add, "+");
 
@@ -582,7 +600,7 @@ void AST::debug_print(size_t indentation) const {
     } break;
     
     default:
-      internal_error("Invalid AST_Kind: %d!", kind);
+      internal_error("Unhandled AST_Kind: %s!", debug_str(kind).c_str());
   }
 
   #undef CASE_UNARY
@@ -639,7 +657,7 @@ enum class Token_Precedence {
   Primary,
 };
 
-const char *debug_str(Token_Precedence precedence) {
+std::string debug_str(Token_Precedence precedence) {
   #define CASE(precedence) case Token_Precedence::precedence: return #precedence
 
   switch (precedence) {
@@ -663,7 +681,7 @@ const char *debug_str(Token_Precedence precedence) {
     CASE(Primary);
 
     default:
-      internal_error("Invalid Token_Precedence: %d!", precedence);
+      return std::to_string(static_cast<int>(precedence));
   }
 
   #undef CASE
@@ -712,7 +730,7 @@ enum class Token_Kind {
   Keyword_Else,
 };
 
-const char *debug_str(Token_Kind kind) {
+std::string debug_str(Token_Kind kind) {
   #define CASE(kind) case Token_Kind::kind: return #kind
 
   switch (kind) {
@@ -750,7 +768,7 @@ const char *debug_str(Token_Kind kind) {
 	  // keywords  
 
     default:
-      internal_error("Invalid Token_Kind: %d!", kind);
+      return std::to_string(static_cast<int>(kind));
   }
 
   #undef CASE
@@ -809,7 +827,7 @@ struct Token {
       CASE(Keyword_Else, None);
 
       default:
-        internal_error("Invalid Token_Kind: %d!", kind);
+        internal_error("Unhandled Token_Kind: %s!", debug_str(kind).c_str());
     }
 
     #undef CASE
@@ -1246,7 +1264,12 @@ struct Parser {
 
   Result<AST *> parse_expression() {
     auto expression = try_(parse_expression_or_assignment());
+
     verify(expression->kind != AST_Kind::Binary_Assignment, expression->location, "Cannot assign in expression context.");
+    verify(expression->kind != AST_Kind::Binary_Variable_Instantiation, expression->location, "Cannot instantiate new variables in expression context.");
+    verify(expression->kind != AST_Kind::Binary_Constant_Instantiation, expression->location, "Cannot instantiate new constants in expression context.");
+    verify(expression->kind != AST_Kind::Binary_Variable_Declaration, expression->location, "Cannot declare new variables in expression context.");
+    
     return expression;
   }
 
@@ -1343,6 +1366,9 @@ struct Parser {
     auto location = token.location;
 
     switch (token.kind) {
+      case Token_Kind::Punctuation_Colon:
+        node = try_(parse_colon(previous, location));
+        break;
       case Token_Kind::Punctuation_Equal:
         node = try_(parse_binary(AST_Kind::Binary_Assignment, precedence, previous, location));
         break;
@@ -1409,6 +1435,36 @@ struct Parser {
 
     return block;
   }
+
+  Result<AST *> parse_colon(AST *previous, Code_Location location) {
+    AST *node = nullptr;
+
+    if (match(Token_Kind::Punctuation_Equal)) {
+      auto rhs = try_(parse_expression());
+
+      AST_Binary *binary = new AST_Binary;
+      binary->kind = AST_Kind::Binary_Variable_Instantiation;
+      binary->location = location;
+      binary->lhs = previous;
+      binary->rhs = rhs;
+
+      node = binary;
+    } else if (match(Token_Kind::Punctuation_Colon)) {
+      auto rhs = try_(parse_expression());
+
+      AST_Binary *binary = new AST_Binary;
+      binary->kind = AST_Kind::Binary_Constant_Instantiation;
+      binary->location = location;
+      binary->lhs = previous;
+      binary->rhs = rhs;
+
+      node = binary;
+    } else {
+      todo("Variable declarations not yet implemented.");
+    }
+
+    return node;
+  }
 };
 
 AST *parse(String source, const char *filename) {
@@ -1421,7 +1477,7 @@ AST *parse(String source, const char *filename) {
     if (p.check(Token_Kind::Eof)) break;
 
     auto result = p.parse_declaration();
-    if (!result.is_ok()) {
+    if (result.is_err()) {
       std::cerr << result.err();
     } else {
       auto node = result.ok();
@@ -1458,8 +1514,10 @@ int main(int argc, const char **argv) {
     return EXIT_FAILURE;
   }
 
-  String source = read_entire_file(argv[1]).unwrap();
-  parse(source, argv[1]);
+  const char *filename = argv[1];
+
+  String source = read_entire_file(filename).unwrap();
+  parse(source, filename);
 
   source.free();
 	return 0;
