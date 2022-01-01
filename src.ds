@@ -1,7 +1,2 @@
-CFG_DEBUG :: true
-
-if CFG_DEBUG {
-  x := 1
-} else {
-  x := 2
-}
+a := 1 +
+2

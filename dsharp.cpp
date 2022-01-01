@@ -1396,6 +1396,8 @@ struct Parser {
   }
 
   Result<AST *> parse_unary(AST_Kind kind, Code_Location location) {
+    skip_newlines();
+
     auto sub = try_(parse_precedence(Token_Precedence::Unary));
 
     auto unary = new AST_Unary;
@@ -1407,6 +1409,8 @@ struct Parser {
   }
 
   Result<AST *> parse_binary(AST_Kind kind, Token_Precedence precedence, AST *lhs, Code_Location location) {
+    skip_newlines();
+
     auto rhs = try_(parse_precedence(precedence + 1));
 
     auto binary = new AST_Binary;
