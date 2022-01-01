@@ -61,6 +61,12 @@ std::string debug_str(const std::optional<T>& option) {
   return s.str();
 }
 
+template<typename T>
+void destruct(const T& x) {
+  typedef T destructor;
+  x.~destructor();
+}
+
 //
 //
 // Helper Data Structures
@@ -158,8 +164,7 @@ struct Result {
 
   ~Result() {
     if (!is_ok) {
-      typedef std::string str_t;
-      err.~str_t();
+      destruct(err);
     }
   }
 
@@ -364,6 +369,8 @@ enum class AST_Kind {
   Literal_String,
 
   Unary,
+
+  Binary_Assignment,
   Binary_Add,
 };
 
@@ -593,6 +600,12 @@ const char *debug_str(Token_Precedence precedence) {
   }
 
   #undef CASE
+}
+
+Token_Precedence operator+(Token_Precedence p, int step) {
+    auto q = static_cast<int>(p) + step;
+    q = std::clamp(q, static_cast<int>(Token_Precedence::None), static_cast<int>(Token_Precedence::Primary));
+    return static_cast<Token_Precedence>(q);
 }
 
 enum class Token_Kind {
@@ -997,6 +1010,227 @@ struct Tokenizer {
 	}
 };
 
+struct Parser {
+  Tokenizer tokenizer;
+
+  bool check(Token_Kind kind) {
+    // @NOTE: 
+    // Maybe `check()` and `match()` should return `Result<bool>`s or something
+    //
+    return tokenizer.peek().unwrap().kind == kind;
+  }
+
+  // @NOTE: See above!
+  //
+  bool match(Token_Kind kind) {
+    if (check(kind)) {
+      tokenizer.next();
+      return true;
+    }
+    return false;
+  }
+
+  Result<Token> expect(Token_Kind kind, const char *err, ...) {
+    auto t = try_(tokenizer.next());
+
+    va_list args;
+    va_start(args, err);
+    verify(t.kind == kind, t.location, err, args);
+
+    return t;
+  }
+
+  Result<AST *> parse_declaration() {
+    AST *node;
+    
+    if (false) {
+      todo("This is where declaration parsing functions will go.");
+    } else {
+      node = try_(parse_statement());
+    }
+
+    return node;
+  }
+
+  Result<AST *> parse_statement() {
+    AST *node;
+
+    if (false) {
+      todo("This is where statement parsing functions will go.");
+    } else {
+      node = try_(parse_expression_or_assignment());
+    }
+
+    return node;
+  }
+
+  Result<AST *> parse_expression_or_assignment() {
+    return parse_precedence(Token_Precedence::Assignment);
+  }
+
+  Result<AST *> parse_expression() {
+    auto expression = try_(parse_expression_or_assignment());
+    verify(expression->kind != AST_Kind::Binary_Assignment, expression->location, "Cannot assign in expression context.");
+    return expression;
+  }
+
+  Result<AST *> parse_precedence(Token_Precedence precedence) {
+    Token token = try_(tokenizer.next());
+    verify(token.kind != Token_Kind::Eof, token.location, "Unexpected end of input!");
+
+    auto previous = try_(parse_prefix(token));
+    internal_verify(previous, "`parse_prefix()` returned null!");
+
+    while (precedence <= try_(tokenizer.peek()).precedence()) {
+      Token token = try_(tokenizer.next());
+      previous = try_(parse_infix(token, previous));
+      internal_verify(previous, "`parse_infix()` returned null!");
+    }
+
+    return previous;
+  }
+
+  Result<AST *> parse_prefix(Token token) {
+    AST *node;
+
+    switch (token.kind) {
+      case Token_Kind::Symbol_Identifier: {
+        AST_Symbol *identifier = new AST_Symbol;
+        identifier->kind = AST_Kind::Symbol_Identifier;
+        identifier->location = token.location;
+
+        // @TODO:
+        // :HandleStringData
+        //
+        identifier->symbol = token.data.string;
+
+        node = identifier;
+      } break;
+      case Token_Kind::Literal_Null: {
+        AST_Literal *literal = new AST_Literal;
+        literal->kind = AST_Kind::Literal_Null;
+        literal->location = token.location;
+
+        node = literal;
+      } break;
+      case Token_Kind::Literal_Boolean: {
+        AST_Literal *literal = new AST_Literal;
+        literal->kind = AST_Kind::Literal_Boolean;
+        literal->location = token.location;
+        literal->as.boolean = token.data.boolean;
+
+        node = literal;
+      } break;
+      case Token_Kind::Literal_Character: {
+        AST_Literal *literal = new AST_Literal;
+        literal->kind = AST_Kind::Literal_Character;
+        literal->location = token.location;
+        literal->as.character = token.data.character;
+
+        node = literal;
+      } break;
+      case Token_Kind::Literal_Integer: {
+        AST_Literal *literal = new AST_Literal;
+        literal->kind = AST_Kind::Literal_Integer;
+        literal->location = token.location;
+        literal->as.integer = token.data.integer;
+
+        node = literal;
+      } break;
+      case Token_Kind::Literal_Floating_Point: {
+        AST_Literal *literal = new AST_Literal;
+        literal->kind = AST_Kind::Literal_Floating_Point;
+        literal->location = token.location;
+        literal->as.floating_point = token.data.floating_point;
+
+        node = literal;
+      } break;
+      case Token_Kind::Literal_String: {
+        AST_Literal *literal = new AST_Literal;
+        literal->kind = AST_Kind::Literal_String;
+        literal->location = token.location;
+        literal->as.string = token.data.string;
+
+        node = literal;
+      } break;
+
+      default:
+        error(token.location, "Unexpected type of expression at the beginning of a greater expression!");
+    }
+
+    return node;
+  }
+
+  Result<AST *> parse_infix(Token token, AST *previous) {
+    AST *node;
+    auto precedence = token.precedence();
+    auto location = token.location;
+
+    switch (token.kind) {
+      case Token_Kind::Punctuation_Plus:
+        node = try_(parse_binary(AST_Kind::Binary_Add, precedence, previous, location));
+        break;
+      case Token_Kind::Punctuation_Dash:
+        todo("Not yet implemented!");
+        node = try_(parse_binary(AST_Kind::Binary_Add, precedence, previous, location));
+        break;
+      case Token_Kind::Punctuation_Star:
+        todo("Not yet implemented!");
+        node = try_(parse_binary(AST_Kind::Binary_Add, precedence, previous, location));
+        break;
+      case Token_Kind::Punctuation_Slash:
+        todo("Not yet implemented!");
+        node = try_(parse_binary(AST_Kind::Binary_Add, precedence, previous, location));
+        break;
+
+      default:
+        error(location, "Unexpected type of expression within a greater expression!");
+    }
+
+    return node;
+  }
+
+  Result<AST *> parse_unary(AST_Kind kind, Code_Location location) {
+    auto sub = try_(parse_precedence(Token_Precedence::Unary));
+
+    auto unary = new AST_Unary;
+    unary->kind = kind;
+    unary->location = location;
+    unary->sub = sub;
+
+    return unary;
+  }
+
+  Result<AST *> parse_binary(AST_Kind kind, Token_Precedence precedence, AST *lhs, Code_Location location) {
+    auto rhs = try_(parse_precedence(precedence + 1));
+
+    auto binary = new AST_Binary;
+    binary->kind = kind;
+    binary->location = location;
+    binary->lhs = lhs;
+    binary->rhs = rhs;
+
+    return binary;
+  }
+};
+
+AST *parse(String source) {
+  Parser p;
+  p.tokenizer.source = source;
+
+  while (!p.check(Token_Kind::Eof)) {
+    auto result = p.parse_declaration();
+    if (!result.is_ok) {
+      std::cerr << result.err;
+    } else {
+      auto node = result.ok;
+      node->debug_print();
+    }
+  }
+
+  return nullptr;
+}
+
 //
 //
 // Entry Point
@@ -1024,85 +1258,8 @@ int main(int argc, const char **argv) {
   }
 
   String source = read_entire_file(argv[1]).unwrap();
-
-	Tokenizer tokenizer;
-	tokenizer.source = source;
-
-	Token t1 = tokenizer.next().unwrap();
-	Token t2 = tokenizer.next().unwrap();
-	Token t3 = tokenizer.next().unwrap();
-	Token t4 = tokenizer.next().unwrap();
+  parse(source);
 
   source.free();
-
-	{
-		std::cout << Color::Cyan << "t1:" << Color::Reset << std::endl;
-		
-		internal_verify(t1.kind == Token_Kind::Symbol_Identifier, "Unexpected kind: %s!", debug_str(t1.kind));
-		std::cout << "\tkind: Symbol_Identifier" << std::endl;
-
-		internal_verify(t1.data.string == "a", "Unexpected value: \"%.*s\"", t1.data.string.size, t1.data.string.data);
-		std::cout << "\tdata.string: \"a\"" << std::endl;
-
-    internal_verify(t1.precedence() == Token_Precedence::None, "Unexpected precedence: %s!", debug_str(t1.precedence()));
-    std::cout << "\tprecedence: None" << std::endl;
-
-		std::cout << "\tlocation: Ln " << t1.location.l0 << ", Col " << t1.location.c0 << std::endl;
-	}
-
-	{
-		std::cout << Color::Cyan << "t2:" << Color::Reset << std::endl;
-		
-		internal_verify(t2.kind == Token_Kind::Punctuation_Plus, "Unexpected kind: %s!", debug_str(t2.kind));
-		std::cout << "\tkind: Punctuation_Plus" << std::endl;
-
-    internal_verify(t2.precedence() == Token_Precedence::Term, "Unexpected precedence: %s!", debug_str(t2.precedence()));
-    std::cout << "\tprecedence: Term" << std::endl;
-
-		std::cout << "\tlocation: Ln " << t2.location.l0 << ", Col " << t2.location.c0 << std::endl;
-	}
-
-	{
-		std::cout << Color::Cyan << "t3:" << Color::Reset << std::endl;
-		
-		internal_verify(t3.kind == Token_Kind::Literal_Floating_Point, "Unexpected kind: %s!", debug_str(t3.kind));
-		std::cout << "\tkind: Literal_Floating_Point" << std::endl;
-
-		internal_verify(t3.data.floating_point == 1.3, "Unexpected value: %f!", t3.data.floating_point);
-		std::cout << "\tdata.floating_point: 1.3" << std::endl;
-
-    internal_verify(t3.precedence() == Token_Precedence::None, "Unexpected precedence: %s!", debug_str(t3.precedence()));
-    std::cout << "\tprecedence: None" << std::endl;
-
-		std::cout << "\tlocation: Ln " << t3.location.l0 << ", Col " << t3.location.c0 << std::endl;
-	}
-	
-	internal_verify(t4.kind == Token_Kind::Eof, "Unexpected kind: %s!", debug_str(t4.kind));
-  internal_verify(t4.precedence() == Token_Precedence::None, "Unexpected precedence: %s!", debug_str(t4.precedence()));
-
-  {
-    AST_Symbol symbol;
-    symbol.kind = AST_Kind::Symbol_Identifier;
-    symbol.type = {};
-    symbol.location = t1.location;
-    symbol.symbol = t1.data.string;
-
-    AST_Literal literal;
-    literal.kind = AST_Kind::Literal_Floating_Point;
-    literal.type = Type { .kind = Type_Kind::Floating_Point };
-    literal.location = t3.location;
-    literal.as.floating_point = t3.data.floating_point;
-
-    AST_Binary add;
-    add.kind = AST_Kind::Binary_Add;
-    add.location = t2.location;
-    add.lhs = &symbol;
-    add.rhs = &literal;
-
-    add.debug_print();
-  }
-
-	std::cout << Color::Green << "SUCCESS!" << Color::Reset << std::endl;
-
 	return 0;
 }
