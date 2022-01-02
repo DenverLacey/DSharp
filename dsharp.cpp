@@ -15,7 +15,9 @@
 //		Tokenizer currently only really supports ASCII.
 // - HandleStringData
 //		Identifier and string literal Tokens currently point to the source code.
-//
+// - FixLocations
+//    Fix Code_Location generation so that it points to the beginning of the
+//    token instead of the end.
 //
 
 //
@@ -385,13 +387,19 @@ enum class AST_Kind {
   Literal_Floating_Point,
   Literal_String,
 
-  Unary,
+  Unary_Not,
+  Unary_Negate,
 
   Binary_Variable_Instantiation,
   Binary_Constant_Instantiation,
   Binary_Variable_Declaration,
   Binary_Assignment,
   Binary_Add,
+  Binary_Subtract,
+  Binary_Multiply,
+  Binary_Divide,
+  Binary_And,
+  Binary_Or,
 
   Block,
 
@@ -408,12 +416,18 @@ std::string debug_str(AST_Kind kind) {
     CASE(Literal_Character);
     CASE(Literal_Integer);
     CASE(Literal_Floating_Point);
-    CASE(Unary);
+    CASE(Unary_Not);
+    CASE(Unary_Negate);
     CASE(Binary_Variable_Instantiation);
     CASE(Binary_Constant_Instantiation);
     CASE(Binary_Variable_Declaration);
     CASE(Binary_Assignment);
     CASE(Binary_Add);
+    CASE(Binary_Subtract);
+    CASE(Binary_Multiply);
+    CASE(Binary_Divide);
+    CASE(Binary_And);
+    CASE(Binary_Or);
     CASE(Block);
     CASE(If);
 
@@ -577,13 +591,19 @@ void AST::debug_print(size_t indentation) const {
       );
     } break;
 
-    CASE_UNARY(Unary, "Unary");
+    CASE_UNARY(Unary_Not, "!");
+    CASE_UNARY(Unary_Negate, "-");
     
     CASE_BINARY(Binary_Variable_Instantiation, ":=");
     CASE_BINARY(Binary_Constant_Instantiation, "::");
     CASE_BINARY(Binary_Variable_Declaration, ":");
     CASE_BINARY(Binary_Assignment, "=");
     CASE_BINARY(Binary_Add, "+");
+    CASE_BINARY(Binary_Subtract, "-");
+    CASE_BINARY(Binary_Multiply, "*");
+    CASE_BINARY(Binary_Divide, "/");
+    CASE_BINARY(Binary_And, "&&");
+    CASE_BINARY(Binary_Or, "||");
 
     CASE_BLOCK(Block, "{}");
 
@@ -653,7 +673,7 @@ enum class Token_Precedence {
   Shift,      // << >>
   Term,       // + -
   Factor,     // * / %
-  Unary,      // !
+  Unary,      // ! ~
   Call,       // . () []
   Primary,
 };
@@ -719,12 +739,15 @@ enum class Token_Kind {
   Delimeter_Right_Curly,
 
 	// punctuation
+  Punctuation_Bang,
 	Punctuation_Equal,
 	Punctuation_Colon,
 	Punctuation_Plus,
 	Punctuation_Dash,
 	Punctuation_Star,
 	Punctuation_Slash,
+  Punctuation_Ampersand_Ampersand,
+  Punctuation_Pipe_Pipe,
 
 	// keywords
   Keyword_If,
@@ -759,14 +782,19 @@ std::string debug_str(Token_Kind kind) {
 	  CASE(Delimeter_Right_Curly);
 
 	  // punctuation
+	  CASE(Punctuation_Bang);
 	  CASE(Punctuation_Equal);
 	  CASE(Punctuation_Colon);
 	  CASE(Punctuation_Plus);
 	  CASE(Punctuation_Dash);
 	  CASE(Punctuation_Star);
 	  CASE(Punctuation_Slash);
+    CASE(Punctuation_Ampersand_Ampersand);
+    CASE(Punctuation_Pipe_Pipe);
 
-	  // keywords  
+	  // keywords
+    CASE(Keyword_If);
+    CASE(Keyword_Else);
 
     default:
       return std::to_string(static_cast<int>(kind));
@@ -816,12 +844,15 @@ struct Token {
 	    CASE(Delimeter_Right_Curly, None);
 
 	    // punctuation
+      CASE(Punctuation_Bang, Unary);
 	    CASE(Punctuation_Equal, Assignment);
 	    CASE(Punctuation_Colon, Colon);
 	    CASE(Punctuation_Plus, Term);
 	    CASE(Punctuation_Dash, Term);
 	    CASE(Punctuation_Star, Factor);
 	    CASE(Punctuation_Slash, Factor);
+      CASE(Punctuation_Ampersand_Ampersand, And);
+      CASE(Punctuation_Pipe_Pipe, Or);
 
 	    // keywords
       CASE(Keyword_If, None);
@@ -835,6 +866,9 @@ struct Token {
   }
 };
 
+// @TODO:
+// :FixLocations
+//
 struct Tokenizer {
 	size_t line = 0;
 	size_t coloumn = 0;
@@ -1106,6 +1140,9 @@ struct Tokenizer {
       case '}': {
         token = make_token(Token_Kind::Delimeter_Right_Curly);
       } break;
+      case '!': {
+        token = make_token(Token_Kind::Punctuation_Bang);
+      } break;
 			case '=': {
 				token = make_token(Token_Kind::Punctuation_Equal);
 			} break;
@@ -1124,6 +1161,14 @@ struct Tokenizer {
 			case '/': {
 				token = make_token(Token_Kind::Punctuation_Slash);
 			} break;
+      case '&': {
+        if (peek_char() == '&') {
+          next_char();
+          token = make_token(Token_Kind::Punctuation_Ampersand_Ampersand);
+        } else {
+          todo("Implement `&` tokenization.");
+        }
+      } break;
 
 			default:
         error(current_location(), "Unknown operator `%c`.", c);
@@ -1245,7 +1290,6 @@ struct Parser {
       if (skip_check(Token_Kind::Keyword_If)) {
         else_block = try_(parse_if_statement());
       } else {
-        skip_newlines();
         else_block = try_(parse_block());
       }
     }
@@ -1294,11 +1338,13 @@ struct Parser {
   Result<AST *> parse_prefix(Token token) {
     AST *node = nullptr;
 
+    Code_Location location = token.location;
+
     switch (token.kind) {
       case Token_Kind::Symbol_Identifier: {
         AST_Symbol *identifier = new AST_Symbol;
         identifier->kind = AST_Kind::Symbol_Identifier;
-        identifier->location = token.location;
+        identifier->location = location;
 
         // @TODO:
         // :HandleStringData
@@ -1310,14 +1356,14 @@ struct Parser {
       case Token_Kind::Literal_Null: {
         AST_Literal *literal = new AST_Literal;
         literal->kind = AST_Kind::Literal_Null;
-        literal->location = token.location;
+        literal->location = location;
 
         node = literal;
       } break;
       case Token_Kind::Literal_Boolean: {
         AST_Literal *literal = new AST_Literal;
         literal->kind = AST_Kind::Literal_Boolean;
-        literal->location = token.location;
+        literal->location = location;
         literal->as.boolean = token.data.boolean;
 
         node = literal;
@@ -1325,7 +1371,7 @@ struct Parser {
       case Token_Kind::Literal_Character: {
         AST_Literal *literal = new AST_Literal;
         literal->kind = AST_Kind::Literal_Character;
-        literal->location = token.location;
+        literal->location = location;
         literal->as.character = token.data.character;
 
         node = literal;
@@ -1333,7 +1379,7 @@ struct Parser {
       case Token_Kind::Literal_Integer: {
         AST_Literal *literal = new AST_Literal;
         literal->kind = AST_Kind::Literal_Integer;
-        literal->location = token.location;
+        literal->location = location;
         literal->as.integer = token.data.integer;
 
         node = literal;
@@ -1341,7 +1387,7 @@ struct Parser {
       case Token_Kind::Literal_Floating_Point: {
         AST_Literal *literal = new AST_Literal;
         literal->kind = AST_Kind::Literal_Floating_Point;
-        literal->location = token.location;
+        literal->location = location;
         literal->as.floating_point = token.data.floating_point;
 
         node = literal;
@@ -1349,7 +1395,7 @@ struct Parser {
       case Token_Kind::Literal_String: {
         AST_Literal *literal = new AST_Literal;
         literal->kind = AST_Kind::Literal_String;
-        literal->location = token.location;
+        literal->location = location;
 
         // @TODO:
         // :HandleStringData
@@ -1358,9 +1404,15 @@ struct Parser {
 
         node = literal;
       } break;
+      case Token_Kind::Punctuation_Bang:
+        node = try_(parse_unary(AST_Kind::Unary_Not, location));
+        break;
+      case Token_Kind::Punctuation_Dash:
+        node = try_(parse_unary(AST_Kind::Unary_Negate, location));
+        break;
 
       default:
-        error(token.location, "Unexpected type of expression!");
+        error(location, "Unexpected type of expression!");
     }
 
     return node;
@@ -1382,20 +1434,23 @@ struct Parser {
         node = try_(parse_binary(AST_Kind::Binary_Add, precedence, previous, location));
         break;
       case Token_Kind::Punctuation_Dash:
-        todo("Not yet implemented!");
-        node = try_(parse_binary(AST_Kind::Binary_Add, precedence, previous, location));
+        node = try_(parse_binary(AST_Kind::Binary_Subtract, precedence, previous, location));
         break;
       case Token_Kind::Punctuation_Star:
-        todo("Not yet implemented!");
-        node = try_(parse_binary(AST_Kind::Binary_Add, precedence, previous, location));
+        node = try_(parse_binary(AST_Kind::Binary_Multiply, precedence, previous, location));
         break;
       case Token_Kind::Punctuation_Slash:
-        todo("Not yet implemented!");
-        node = try_(parse_binary(AST_Kind::Binary_Add, precedence, previous, location));
+        node = try_(parse_binary(AST_Kind::Binary_Divide, precedence, previous, location));
+        break;
+      case Token_Kind::Punctuation_Ampersand_Ampersand:
+        node = try_(parse_binary(AST_Kind::Binary_And, precedence, previous, location));
+        break;
+      case Token_Kind::Punctuation_Pipe_Pipe:
+        node = try_(parse_binary(AST_Kind::Binary_Or, precedence, previous, location));
         break;
 
       default:
-        error(location, "Unexpected type of expression within a greater expression!");
+        error(location, "Unexpected type of expression!");
     }
 
     return node;
