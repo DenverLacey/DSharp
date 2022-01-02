@@ -605,6 +605,7 @@ void AST::debug_print(size_t indentation) const {
 
   #undef CASE_UNARY
   #undef CASE_BINARY
+  #undef CASE_BLOCK
 }
 
 void AST::print_unary(const AST_Unary *unary, size_t indentation) const {
@@ -988,15 +989,15 @@ struct Tokenizer {
 	}
 
 	Token next_number_token() {
-		// @TODO:
-		// :HandleUTF8
-		//
-		// @NOTE:
+		bool is_floating_point = false;
+
+    // @NOTE:
 		// This is because we've already moved passed the first character. 
 		// This should be dealt with more explicitly or by reworking other stuff.
 		//
-
-    bool is_floating_point = false;
+    // @TODO:
+		// :HandleUTF8
+		//
 		char *start = source.data - 1;
 		size_t size = 1;
 
@@ -1151,7 +1152,7 @@ struct Parser {
   //
   bool match(Token_Kind kind) {
     if (check(kind)) {
-      tokenizer.next();
+      tokenizer.next().unwrap();
       return true;
     }
     return false;
@@ -1219,9 +1220,9 @@ struct Parser {
   Result<AST *> parse_statement() {
     AST *node = nullptr;
 
-    if (match(Token_Kind::Delimeter_Left_Curly)) {
+    if (check(Token_Kind::Delimeter_Left_Curly)) {
       node = try_(parse_block());
-    } else if (match(Token_Kind::Keyword_If)) {
+    } else if (check(Token_Kind::Keyword_If)) {
       node = try_(parse_if_statement());
     } else {
       node = try_(parse_expression_or_assignment());
@@ -1232,25 +1233,26 @@ struct Parser {
   }
 
   Result<AST_If *> parse_if_statement() {
-    auto condition = try_(parse_expression());
+    auto location = try_(skip_expect(Token_Kind::Keyword_If, "Expected `if` statement!")).location;
     skip_newlines();
+    
+    auto condition = try_(parse_expression());
 
-    try_(skip_expect(Token_Kind::Delimeter_Left_Curly, "Expected `{` after condition expression in `if` statement!"));
     auto then_block = try_(parse_block());
 
     AST *else_block = nullptr;
     if (skip_match(Token_Kind::Keyword_Else)) {
-      if (skip_match(Token_Kind::Keyword_If)) {
+      if (skip_check(Token_Kind::Keyword_If)) {
         else_block = try_(parse_if_statement());
       } else {
-        try_(skip_expect(Token_Kind::Delimeter_Left_Curly, "Expected `{` or `if` after `else`!"));
+        skip_newlines();
         else_block = try_(parse_block());
       }
     }
 
     AST_If *node = new AST_If;
     node->kind = AST_Kind::If;
-    node->location = then_block->location;
+    node->location = location;
     node->condition = condition;
     node->then_block = then_block;
     node->else_block = else_block;
@@ -1348,13 +1350,17 @@ struct Parser {
         AST_Literal *literal = new AST_Literal;
         literal->kind = AST_Kind::Literal_String;
         literal->location = token.location;
+
+        // @TODO:
+        // :HandleStringData
+        //
         literal->as.string = token.data.string;
 
         node = literal;
       } break;
 
       default:
-        error(token.location, "Unexpected type of expression at the beginning of a greater expression!");
+        error(token.location, "Unexpected type of expression!");
     }
 
     return node;
@@ -1423,6 +1429,8 @@ struct Parser {
   }
 
   Result<AST_Block *> parse_block() {
+    auto location = try_(skip_expect(Token_Kind::Delimeter_Left_Curly, "Expected `{` to begin block!")).location;
+
     auto block = new AST_Block;
     block->kind = AST_Kind::Block;
 
@@ -1435,7 +1443,7 @@ struct Parser {
     }
 
     auto right_curly = try_(skip_expect(Token_Kind::Delimeter_Right_Curly, "Expected `}` to terminate block!"));
-    block->location = right_curly.location;
+    block->location = location;
 
     return block;
   }
