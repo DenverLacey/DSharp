@@ -864,6 +864,39 @@ struct Token {
 
     #undef CASE
   }
+
+  void debug_print() const {
+    printf("Token::%s:\n", debug_str(kind).c_str());
+
+    // @TODO:
+    // print data
+    //
+    switch (kind) {
+      case Token_Kind::Literal_Boolean:
+        printf("%*sdata: %s\n", static_cast<int>(Print_Indentation_Size), "", data.boolean ? "true" : "false");
+        break;
+      case Token_Kind::Literal_Character:
+        printf("%*sdata: %c\n", static_cast<int>(Print_Indentation_Size), "", data.character);
+        break;
+      case Token_Kind::Literal_Integer:
+        printf("%*sdata: %lld\n", static_cast<int>(Print_Indentation_Size), "", data.integer);
+        break;
+      case Token_Kind::Literal_Floating_Point:
+        printf("%*sdata: '%f'\n", static_cast<int>(Print_Indentation_Size), "", data.floating_point);
+        break;
+      case Token_Kind::Literal_String:
+        printf("%*sdata: \"%.*s\"\n", static_cast<int>(Print_Indentation_Size), "", static_cast<int>(data.string.size), data.string.data);
+        break;
+      case Token_Kind::Symbol_Identifier:
+        printf("%*sdata: \"%.*s\"\n", static_cast<int>(Print_Indentation_Size), "", static_cast<int>(data.string.size), data.string.data);
+        break;
+
+      default:
+        break;
+    }
+
+    printf("%*slocation: %s\n", static_cast<int>(Print_Indentation_Size), "", location.debug_str().c_str());
+  }
 };
 
 // @TODO:
@@ -894,6 +927,14 @@ struct Tokenizer {
 		return next_char;
 	}
 
+  bool match_char(char32_t &actual, char32_t expected) {
+    if (actual == expected) {
+      actual = next_char();
+      return true;
+    }
+    return false;
+  }
+
 	Code_Location current_location() {
 		return Code_Location {
 			line,
@@ -919,24 +960,27 @@ struct Tokenizer {
 	}
 
 	char32_t skip_to_begining_of_next_token() {
-		char c = next_char();
+		char c = peek_char();
 
 		while (is_whitespace(c)) {
 			if (c == '/' && peek_char(1) == '/') {
 				while (c != '\n') {
-					c = next_char();
+					next_char();
+          c = peek_char();
 				}
 			}
 
 			if (c == '\n' && previous_token.kind == Token_Kind::Delimeter_Newline) {
 				while (c == '\n') {
-					c = next_char();
+					next_char();
+          c = peek_char();
 					line++;
           coloumn = 0;
 				}
-			}
-
-			c = next_char();
+			} else {
+			  next_char();
+        c = peek_char();
+      }
 		}
 
 		return c;
@@ -965,22 +1009,23 @@ struct Tokenizer {
 
 		if (c == '\0') {
 			previous_token = make_token(Token_Kind::Eof);
-		} else if (c == '\n') {
+		} else if (match_char(c, '\n')) {
 			previous_token = make_token(Token_Kind::Delimeter_Newline);
 			line++;
       coloumn = 0;
-		} else if (c == '\'') {
+		} else if (match_char(c, '\'')) {
 			previous_token = try_(next_character_token());
-		} else if (c == '\"') {
+		} else if (match_char(c, '\"')) {
 			previous_token = next_string_token();
-		} else if (isdigit(c) || (c == '.' && isdigit(peek_char()))) {
+		} else if (isdigit(c) || (c == '.' && isdigit(peek_char(1)))) {
 			previous_token = next_number_token();
-		} else if (isalpha(c) || (c == '_' && is_identifier_character(peek_char()))) {
+		} else if (isalpha(c) || (c == '_' && is_identifier_character(peek_char(1)))) {
 			previous_token = next_keyword_or_identifier_token();
 		} else {
+      next_char();
 			previous_token = try_(next_punctuation_token(c));
 		}
-
+    
 		return previous_token;
 	}
 
@@ -1025,15 +1070,11 @@ struct Tokenizer {
 	Token next_number_token() {
 		bool is_floating_point = false;
 
-    // @NOTE:
-		// This is because we've already moved passed the first character. 
-		// This should be dealt with more explicitly or by reworking other stuff.
-		//
     // @TODO:
 		// :HandleUTF8
 		//
-		char *start = source.data - 1;
-		size_t size = 1;
+		char *start = source.data;
+		size_t size = 0;
 
 		while (isdigit(peek_char())) {
 			size++;
@@ -1078,10 +1119,7 @@ struct Tokenizer {
 	}
 
 	Token next_keyword_or_identifier_token() {
-    // @HACK:
-    // `source.data - 1` because we moved passed the first character in the symbol.
-    //
-		auto word = String { 1, source.data - 1 };
+		auto word = String { 0, source.data };
 
 		while (is_identifier_character(peek_char())) {
 			word.size++;
@@ -1527,6 +1565,7 @@ struct Parser {
 
       node = binary;
     } else {
+      previous->debug_print();
       todo("Variable declarations not yet implemented.");
     }
 

@@ -1,7 +1,7 @@
 a := true
 b := false
 
-if !a && b {
+if a && !b {
   c := 1
 } else {
   c := 0
