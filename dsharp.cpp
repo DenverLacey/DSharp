@@ -15,9 +15,7 @@
 //		Tokenizer currently only really supports ASCII.
 // - HandleStringData
 //		Identifier and string literal Tokens currently point to the source code.
-// - FixLocations
-//    Fix Code_Location generation so that it points to the beginning of the
-//    token instead of the end.
+//
 //
 
 //
@@ -946,8 +944,7 @@ struct Tokenizer {
 	Token make_token(Token_Kind kind, Token_Data data = {}) {
 		return Token { 
 			kind, 
-			data, 
-			current_location() 
+			data
 		};
 	}
 
@@ -1006,6 +1003,7 @@ struct Tokenizer {
 		//
 
 		char32_t c = skip_to_begining_of_next_token();
+    Code_Location token_location = current_location();
 
 		if (c == '\0') {
 			previous_token = make_token(Token_Kind::Eof);
@@ -1025,7 +1023,9 @@ struct Tokenizer {
       next_char();
 			previous_token = try_(next_punctuation_token(c));
 		}
-    
+
+    previous_token.location = token_location;
+
 		return previous_token;
 	}
 
@@ -1217,6 +1217,7 @@ struct Tokenizer {
 };
 
 struct Parser {
+  bool error;
   Tokenizer tokenizer;
 
   bool check(Token_Kind kind) {
@@ -1573,10 +1574,15 @@ struct Parser {
   }
 };
 
-AST *parse(String source, const char *filename) {
+AST_Block *parse(String source, const char *filename) {
   Parser p;
+  p.error = false;
   p.tokenizer.source = source;
   p.tokenizer.filename = filename;
+
+  AST_Block *ast = new AST_Block;
+  ast->kind = AST_Kind::Block;
+  ast->location = p.tokenizer.current_location();
 
   while (true) {
     p.skip_newlines();
@@ -1584,14 +1590,15 @@ AST *parse(String source, const char *filename) {
 
     auto result = p.parse_declaration();
     if (result.is_err()) {
+      p.error = true;
       std::cerr << result.err();
-    } else {
-      auto node = result.ok();
-      node->debug_print();
+      continue;
     }
+
+    ast->nodes.push_back(result.ok());
   }
 
-  return nullptr;
+  return p.error ? nullptr : ast;
 }
 
 //
@@ -1623,7 +1630,10 @@ int main(int argc, const char **argv) {
   const char *filename = argv[1];
 
   String source = read_entire_file(filename).unwrap();
-  parse(source, filename);
+  AST_Block *ast = parse(source, filename);
+  if (ast) {
+    ast->debug_print();
+  }
 
   source.free();
 	return 0;
