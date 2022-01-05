@@ -142,22 +142,22 @@ struct Code_Location {
 //
 //
 
-template<typename Ok>
+template<typename Ok, typename Err = std::string>
 class Result {
-	std::variant<Ok, std::string> repr;
+	std::variant<Ok, Err> repr;
 
 public:
 	Result(const Ok& ok) {
 		repr = ok;
 	}
 
-	Result(std::string err) {
-		repr = std::move(err);
+	Result(const Err& err) {
+		repr = err;
 	}
 
 	Ok unwrap() {
-		if (std::holds_alternative<std::string>(repr)) {
-			std::cerr << std::get<std::string>(repr);
+		if (std::holds_alternative<Err>(repr)) {
+			std::cerr << std::get<Err>(repr);
 			exit(EXIT_FAILURE);
 		}
 		return std::get<Ok>(repr);
@@ -168,28 +168,28 @@ public:
 	}
 
 	bool is_err() {
-		return std::holds_alternative<std::string>(repr);
+		return std::holds_alternative<Err>(repr);
 	}
 
-	Ok ok() {
+	const Ok& ok() {
 		return std::get<Ok>(repr);
 	}
 
-	const std::string& err() {
+	const Err& err() {
 		return std::get<std::string>(repr);
 	}
 };
 
-template<>
-class Result<void> {
+template<typename Err>
+class Result<void, Err> {
 	bool _is_ok;
-	std::string _err;
+	Err _err;
 
 public:
 	Result() : _is_ok(true) { }
 
-	Result(std::string err) : _is_ok(false) {
-		_err = std::move(err);
+	Result(const Err& err) : _is_ok(false) {
+		_err = err;
 	}
 
 	void unwrap() {
@@ -207,7 +207,7 @@ public:
 		return !_is_ok;
 	}
 
-	const std::string& err() {
+	const Err& err() {
 		return _err;
 	}
 };
@@ -863,37 +863,37 @@ struct Token {
 		#undef CASE
 	}
 
-	void debug_print() const {
-		printf("Token::%s:\n", debug_str(kind).c_str());
+	void debug_print(int indentation = 0) const {
+		printf("%*sToken::%s:\n", static_cast<int>(Print_Indentation_Size * indentation), "", debug_str(kind).c_str());
 
 		// @TODO:
 		// print data
 		//
 		switch (kind) {
 			case Token_Kind::Literal_Boolean:
-				printf("%*sdata: %s\n", static_cast<int>(Print_Indentation_Size), "", data.boolean ? "true" : "false");
+				printf("%*sdata: %s\n", static_cast<int>(Print_Indentation_Size * (indentation + 1)), "", data.boolean ? "true" : "false");
 				break;
 			case Token_Kind::Literal_Character:
-				printf("%*sdata: %c\n", static_cast<int>(Print_Indentation_Size), "", data.character);
+				printf("%*sdata: %c\n", static_cast<int>(Print_Indentation_Size * (indentation + 1)), "", data.character);
 				break;
 			case Token_Kind::Literal_Integer:
-				printf("%*sdata: %lld\n", static_cast<int>(Print_Indentation_Size), "", data.integer);
+				printf("%*sdata: %lld\n", static_cast<int>(Print_Indentation_Size * (indentation + 1)), "", data.integer);
 				break;
 			case Token_Kind::Literal_Floating_Point:
-				printf("%*sdata: '%f'\n", static_cast<int>(Print_Indentation_Size), "", data.floating_point);
+				printf("%*sdata: '%f'\n", static_cast<int>(Print_Indentation_Size * (indentation + 1)), "", data.floating_point);
 				break;
 			case Token_Kind::Literal_String:
-				printf("%*sdata: \"%.*s\"\n", static_cast<int>(Print_Indentation_Size), "", static_cast<int>(data.string.size), data.string.data);
+				printf("%*sdata: \"%.*s\"\n", static_cast<int>(Print_Indentation_Size * (indentation + 1)), "", static_cast<int>(data.string.size), data.string.data);
 				break;
 			case Token_Kind::Symbol_Identifier:
-				printf("%*sdata: \"%.*s\"\n", static_cast<int>(Print_Indentation_Size), "", static_cast<int>(data.string.size), data.string.data);
+				printf("%*sdata: \"%.*s\"\n", static_cast<int>(Print_Indentation_Size * (indentation + 1)), "", static_cast<int>(data.string.size), data.string.data);
 				break;
 
 			default:
 				break;
 		}
 
-		printf("%*slocation: %s\n", static_cast<int>(Print_Indentation_Size), "", location.debug_str().c_str());
+		printf("%*slocation: %s\n", static_cast<int>(Print_Indentation_Size * (indentation + 1)), "", location.debug_str().c_str());
 	}
 };
 
@@ -912,6 +912,9 @@ struct Tokenizer {
 	// :HandleUTF8
 	//
 	char32_t peek_char(int skip = 0) {
+		if (source.size <= 0) {
+			return '\0';
+		}
 		return source.data[skip];
 	}
 
@@ -919,6 +922,10 @@ struct Tokenizer {
 	// :HandleUTF8
 	//
 	char32_t next_char() {
+		if (source.size <= 0) {
+			return '\0';
+		}
+
 		char32_t next_char = peek_char();
 		source.advance();
 		coloumn++;
@@ -1209,7 +1216,7 @@ struct Tokenizer {
 			} break;
 
 			default:
-				error(current_location(), "Unknown operator `%c`.", c);
+				error(current_location(), "Unknown operator `%c`. source.size = %lld", c, source.size);
 		}
 
 		return token;
@@ -1224,7 +1231,8 @@ struct Parser {
 		// @NOTE: 
 		// Maybe `check()` and `match()` should return `Result<bool>`s or something
 		//
-		return tokenizer.peek().unwrap().kind == kind;
+		auto peeked = tokenizer.peek().unwrap();
+		return peeked.kind == kind;
 	}
 
 	bool skip_check(Token_Kind kind) {
