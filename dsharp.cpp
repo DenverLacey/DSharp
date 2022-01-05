@@ -102,6 +102,10 @@ struct String {
 		data = nullptr;
 	}
 
+	std::string str() const {
+		return std::string { data, size };
+	}
+
 	bool operator==(const String& other) const {
 		return size == other.size && memcmp(data, other.data, size) == 0;
 	}
@@ -707,9 +711,9 @@ std::string debug_str(Token_Precedence precedence) {
 }
 
 Token_Precedence operator+(Token_Precedence p, int step) {
-		auto q = static_cast<int>(p) + step;
-		q = std::clamp(q, static_cast<int>(Token_Precedence::None), static_cast<int>(Token_Precedence::Primary));
-		return static_cast<Token_Precedence>(q);
+	auto q = static_cast<int>(p) + step;
+	q = std::clamp(q, static_cast<int>(Token_Precedence::None), static_cast<int>(Token_Precedence::Primary));
+	return static_cast<Token_Precedence>(q);
 }
 
 enum class Token_Kind {
@@ -717,8 +721,6 @@ enum class Token_Kind {
 
 	// literals
 	Literal_Null,
-	Literal_True,
-	Literal_False,
 	Literal_Boolean,
 	Literal_Character,
 	Literal_Integer,
@@ -760,8 +762,6 @@ std::string debug_str(Token_Kind kind) {
 
 		// literals
 		CASE(Literal_Null);
-		CASE(Literal_True);
-		CASE(Literal_False);
 		CASE(Literal_Boolean);
 		CASE(Literal_Character);
 		CASE(Literal_Integer);
@@ -822,8 +822,6 @@ struct Token {
 
 			// literals
 			CASE(Literal_Null, None);
-			CASE(Literal_True, None);
-			CASE(Literal_False, None);
 			CASE(Literal_Boolean, None);
 			CASE(Literal_Character, None);
 			CASE(Literal_Integer, None);
@@ -894,6 +892,53 @@ struct Token {
 		}
 
 		printf("%*slocation: %s\n", static_cast<int>(Print_Indentation_Size * (indentation + 1)), "", location.debug_str().c_str());
+	}
+
+	std::string display_str() const {
+		#define CASE(kind, display) case Token_Kind::kind: return display
+
+		switch (kind) {
+			CASE(Eof, "EOF");
+
+			// literals
+			CASE(Literal_Null, "null");
+			CASE(Literal_Boolean, data.boolean ? "true" : "false");
+			CASE(Literal_Character, std::to_string(data.character));
+			CASE(Literal_Integer, std::to_string(data.integer));
+			CASE(Literal_Floating_Point, std::to_string(data.floating_point));
+			CASE(Literal_String, data.string.str());
+		
+			// symbols
+			CASE(Symbol_Identifier, data.string.str());
+		
+			// delimeters
+			CASE(Delimeter_Newline, "new-line");
+			CASE(Delimeter_Semicolon, ";");
+			CASE(Delimeter_Left_Parenthesis, "(");
+			CASE(Delimeter_Right_Parenthesis, ")");
+			CASE(Delimeter_Left_Curly, "{");
+			CASE(Delimeter_Right_Curly, "}");
+		
+			// punctuation
+			CASE(Punctuation_Bang, "!");
+			CASE(Punctuation_Equal, "=");
+			CASE(Punctuation_Colon, ":");
+			CASE(Punctuation_Plus, "+");
+			CASE(Punctuation_Dash, "-");
+			CASE(Punctuation_Star, "*");
+			CASE(Punctuation_Slash, "/");
+			CASE(Punctuation_Ampersand_Ampersand, "&&");
+			CASE(Punctuation_Pipe_Pipe, "||");
+		
+			// keywords
+			CASE(Keyword_If, "if");
+			CASE(Keyword_Else, "else");
+
+			default:
+				internal_error("Unhandled Token_Kind: %s!\n", debug_str(kind).c_str());
+		}
+
+		#undef CASE
 	}
 };
 
@@ -1137,19 +1182,19 @@ struct Tokenizer {
 		if (word == "null") {
 			token = make_token(Token_Kind::Literal_Null);
 		} else if (word == "true") {
-				token = make_token(
-					Token_Kind::Literal_Boolean,
-					Token_Data {
-						.boolean = true
-					}
-				);
+			token = make_token(
+				Token_Kind::Literal_Boolean,
+				Token_Data {
+					.boolean = true
+				}
+			);
 		} else if (word == "false") {
 			token = make_token(
-					Token_Kind::Literal_Boolean,
-					Token_Data {
-						.boolean = false
-					}
-				);
+				Token_Kind::Literal_Boolean,
+				Token_Data {
+					.boolean = false
+				}
+			);
 		} else if (word == "if") {
 			token = make_token(Token_Kind::Keyword_If);
 		} else if (word == "else") {
@@ -1216,7 +1261,7 @@ struct Tokenizer {
 			} break;
 
 			default:
-				error(current_location(), "Unknown operator `%c`. source.size = %lld", c, source.size);
+				error(current_location(), "Unknown operator `%c`.", c);
 		}
 
 		return token;
@@ -1368,7 +1413,7 @@ struct Parser {
 
 	Result<AST *> parse_precedence(Token_Precedence precedence) {
 		Token token = try_(tokenizer.next());
-		verify(token.kind != Token_Kind::Eof, token.location, "Unexpected end of input!");
+		verify(token.kind != Token_Kind::Eof, token.location, "Unexpected end of file!");
 
 		auto previous = try_(parse_prefix(token));
 		internal_verify(previous, "`parse_prefix()` returned null!");
@@ -1459,7 +1504,7 @@ struct Parser {
 				break;
 
 			default:
-				error(location, "Unexpected type of expression!");
+				error(location, "`%s` is not a prefix operation!", token.display_str().c_str());
 		}
 
 		return node;
@@ -1497,7 +1542,7 @@ struct Parser {
 				break;
 
 			default:
-				error(location, "Unexpected type of expression!");
+				error(location, "`%s` is not an infix operation!", token.display_str().c_str());
 		}
 
 		return node;
