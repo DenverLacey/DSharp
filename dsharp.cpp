@@ -7,6 +7,7 @@
 #include <sstream>
 #include <fstream>
 #include <stdarg.h>
+#include <limits>
 
 //
 //
@@ -17,8 +18,38 @@
 //		Identifier and string literal Tokens currently point to the source code.
 // - TypeEquality
 //		Implement proper equality checks for `Type`s.
+// - CalculateNumericSize
+//		Calculate floating point literals required size to determine int type.
 //
 //
+
+//
+//
+// typedefs
+//
+//
+
+using Size = size_t;
+using Address = uint16_t;
+
+namespace Runtime_Type {
+	using Boolean = bool;
+
+	using Character = char32_t;
+
+	using Integer8  = int8_t;
+	using Integer16 = int16_t;
+	using Integer32 = int32_t;
+	using Integer64 = int64_t;
+
+	using Floating_Point32 = float;
+	using Floating_Point64 = double;
+
+	struct String {
+		Integer64 size;
+		char *chars;
+	};
+};
 
 //
 //
@@ -65,6 +96,22 @@ std::string debug_str(const std::optional<T>& option) {
 	return s.str();
 }
 
+Size minimum_required_size_for_literal(int64_t value) {
+	if (value <= std::numeric_limits<Runtime_Type::Integer8>::max()) return sizeof(Runtime_Type::Integer8);
+	if (value <= std::numeric_limits<Runtime_Type::Integer16>::max()) return sizeof(Runtime_Type::Integer16);
+	if (value <= std::numeric_limits<Runtime_Type::Integer32>::max()) return sizeof(Runtime_Type::Integer32);
+	return sizeof(Runtime_Type::Integer64);
+}
+
+Size minimum_required_size_for_literal(double value) {
+	// @TODO:
+	// :CalculateNumericSize
+	//
+
+	// if (value <= std::numeric_limits<Runtime_Type::Floating_Point32>::max()) return sizeof(Runtime_Type::Floating_Point32);
+	return sizeof(Runtime_Type::Floating_Point64);
+}
+
 //
 //
 // Helper Data Structures
@@ -73,47 +120,47 @@ std::string debug_str(const std::optional<T>& option) {
 
 struct String {
 	size_t size;
-	char *data;
+	char *chars;
 
 	String() = default;
 
-	String(size_t size, char *data) :
+	String(size_t size, char *chars) :
 		size(size),
-		data(data)
+		chars(chars)
 	{
 	}
 
-	String(char *data) : 
-		size(strlen(data)),
-		data(data)
+	String(char *str) : 
+		size(strlen(str)),
+		chars(str)
 	{
 	}
 
 	char advance() {
-		char c = *data;
+		char c = *chars;
 		
-		data++;
+		chars++;
 		size--;
 
 		return c;
 	}
 
 	void free() {
-		::free(data);
+		::free(chars);
 		size = 0;
-		data = nullptr;
+		chars = nullptr;
 	}
 
 	std::string str() const {
-		return std::string { data, size };
+		return std::string { chars, size };
 	}
 
 	bool operator==(const String& other) const {
-		return size == other.size && memcmp(data, other.data, size) == 0;
+		return size == other.size && memcmp(chars, other.chars, size) == 0;
 	}
 
 	bool operator==(const char *other) const {
-		return (other[size] == '\0') && (memcmp(data, other, size) == 0);
+		return (other[size] == '\0') && (memcmp(chars, other, size) == 0);
 	}
 
 	bool operator!=(const String& other) const {
@@ -366,46 +413,66 @@ std::string debug_str(Type_Kind kind) {
 	return s;
 }
 
-std::string display_str(Type_Kind kind) {
-	std::string s;
-	
-	switch (kind) {
-		case Type_Kind::No_Type: {
-			s = "!";
-		} break;
-		case Type_Kind::Null: {
-			s = "Null";
-		} break;
-		case Type_Kind::Boolean: {
-			s = "bool";
-		} break;
-		case Type_Kind::Character: {
-			s = "char";
-		} break;
-		case Type_Kind::Integer: {
-			s = "int";
-		} break;
-		case Type_Kind::Floating_Point: {
-			s = "float";
-		} break;
-		case Type_Kind::String: {
-			s = "string";
-		} break;
-		
-		default:
-			internal_error("Unhandled Type_Kind: %s!", debug_str(kind).c_str());
-	}
-
-	return s;
-}
+struct Primitive_Type_Data {
+	Size size;
+};
 
 union Type_Data {
-
+	Primitive_Type_Data primitive;
 };
 
 struct Type {
 	Type_Kind kind;
 	Type_Data data;
+
+	static constexpr Type Boolean() {
+		return Type {
+			.kind = Type_Kind::Boolean,
+			.data = Type_Data {
+				.primitive = { .size = sizeof(Runtime_Type::Boolean) }
+			}
+		};
+	}
+
+	static constexpr Type Character() {
+		return Type {
+			.kind = Type_Kind::Character,
+			.data = Type_Data {
+				.primitive = { .size = sizeof(Runtime_Type::Character) }
+			}
+		};
+	}
+
+	static constexpr Type Integer(size_t size) {
+		internal_verify(size == 1 || size == 2 || size == 4 || size == 8, "Invalid size argument: %zu!", size);
+
+		return Type {
+			.kind = Type_Kind::Integer,
+			.data = Type_Data {
+				.primitive = { .size = size }
+			}
+		};
+	}
+
+	static constexpr Type Floating_Point(size_t size) {
+		internal_verify(size == 4 || size == 8, "Invalid size argument: %zu!", size);
+
+		return Type {
+			.kind = Type_Kind::Floating_Point,
+			.data = Type_Data {
+				.primitive = { .size = size }
+			}
+		};
+	}
+
+	static constexpr Type String() {
+		return Type {
+			.kind = Type_Kind::String,
+			.data = Type_Data {
+				.primitive = { .size = sizeof(Runtime_Type::String) }
+			}
+		};
+	}
 
 	std::string debug_str() const {
 		std::string s;
@@ -416,11 +483,17 @@ struct Type {
 			case Type_Kind::Null:
 			case Type_Kind::Boolean:
 			case Type_Kind::Character:
-			case Type_Kind::Integer:
-			case Type_Kind::Floating_Point:
 			case Type_Kind::String:
 				s = ::debug_str(kind);
 				break;
+
+			// primitive types with many size variants
+			case Type_Kind::Integer:
+			case Type_Kind::Floating_Point: {
+				std::stringstream ss;
+				ss << ::debug_str(kind) << data.primitive.size * 8;
+				s = ss.str();
+			} break;
 
 			default:
 				s = std::to_string(static_cast<int>(kind));
@@ -434,15 +507,31 @@ struct Type {
 		std::string s;
 
 		switch (kind) {
-			case Type_Kind::No_Type:
-			case Type_Kind::Null:
-			case Type_Kind::Boolean:
-			case Type_Kind::Character:
-			case Type_Kind::Integer:
-			case Type_Kind::Floating_Point:
-			case Type_Kind::String:
-				s = ::display_str(kind);
-				break;
+			case Type_Kind::No_Type: {
+				s = "!";
+			} break;
+			case Type_Kind::Null: {
+				s = "Null";
+			} break;
+			case Type_Kind::Boolean: {
+				s = "bool";
+			} break;
+			case Type_Kind::Character: {
+				s = "char";
+			} break;
+			case Type_Kind::Integer: {
+				std::stringstream ss;
+				ss << "i" << data.primitive.size * 8;
+				s = ss.str();
+			} break;
+			case Type_Kind::Floating_Point: {
+				std::stringstream ss;
+				ss << "f" << data.primitive.size * 8;
+				s = ss.str();
+			} break;
+			case Type_Kind::String: {
+				s = "string";
+			} break;
 
 			default:
 				internal_error("Unhandled Type_Kind: %s!", ::debug_str(kind).c_str());
@@ -611,7 +700,7 @@ void AST::debug_print(size_t indentation) const {
 
 			printf("%*sid: `%.*s`\n",
 				static_cast<int>(Print_Indentation_Size * (indentation + 1)), "",
-				static_cast<int>(self->symbol.size), self->symbol.data
+				static_cast<int>(self->symbol.size), self->symbol.chars
 			);
 		} break;
 		case AST_Kind::Literal_Null: {
@@ -681,7 +770,7 @@ void AST::debug_print(size_t indentation) const {
 
 			printf("%*svalue: %.*s\n",
 				static_cast<int>(Print_Indentation_Size * (indentation + 1)), "",
-				static_cast<int>(self->as.string.size), self->as.string.data
+				static_cast<int>(self->as.string.size), self->as.string.chars
 			);
 		} break;
 
@@ -973,10 +1062,10 @@ struct Token {
 				printf("%*sdata: '%f'\n", static_cast<int>(Print_Indentation_Size * (indentation + 1)), "", data.floating_point);
 				break;
 			case Token_Kind::Literal_String:
-				printf("%*sdata: \"%.*s\"\n", static_cast<int>(Print_Indentation_Size * (indentation + 1)), "", static_cast<int>(data.string.size), data.string.data);
+				printf("%*sdata: \"%.*s\"\n", static_cast<int>(Print_Indentation_Size * (indentation + 1)), "", static_cast<int>(data.string.size), data.string.chars);
 				break;
 			case Token_Kind::Symbol_Identifier:
-				printf("%*sdata: \"%.*s\"\n", static_cast<int>(Print_Indentation_Size * (indentation + 1)), "", static_cast<int>(data.string.size), data.string.data);
+				printf("%*sdata: \"%.*s\"\n", static_cast<int>(Print_Indentation_Size * (indentation + 1)), "", static_cast<int>(data.string.size), data.string.chars);
 				break;
 
 			default:
@@ -1052,7 +1141,7 @@ struct Tokenizer {
 		if (source.size <= 0) {
 			return '\0';
 		}
-		return source.data[skip];
+		return source.chars[skip];
 	}
 
 	// @TODO:
@@ -1195,7 +1284,7 @@ struct Tokenizer {
 		// @TODO:
 		// :HandleStringData
 		//
-		auto string = String { 0, source.data };
+		auto string = String { 0, source.chars };
 
 		char32_t c = next_char();
 		while (c != '\"' && c != '\0') {
@@ -1217,7 +1306,7 @@ struct Tokenizer {
 		// @TODO:
 		// :HandleUTF8
 		//
-		char *start = source.data;
+		char *start = source.chars;
 		size_t size = 0;
 
 		while (isdigit(peek_char())) {
@@ -1263,7 +1352,7 @@ struct Tokenizer {
 	}
 
 	Token next_keyword_or_identifier_token() {
-		auto word = String { 0, source.data };
+		auto word = String { 0, source.chars };
 
 		while (is_identifier_character(peek_char())) {
 			word.size++;
@@ -1718,7 +1807,7 @@ struct Parser {
 	}
 };
 
-Result<AST_Block *> parse(String source, const char *filename) {
+AST_Block *parse(String source, const char *filename) {
 	Parser p;
 	p.error = false;
 	p.tokenizer.source = source;
@@ -1742,7 +1831,7 @@ Result<AST_Block *> parse(String source, const char *filename) {
 		ast->nodes.push_back(result.ok());
 	}
 
-	return p.error ? Result<AST_Block *> { "Could not parse program!" } : Result<AST_Block *> { ast };
+	return p.error ? nullptr : ast;
 }
 
 //
@@ -1766,23 +1855,31 @@ struct Typechecker {
 				typechecked_node = node;
 			} break;
 			case AST_Kind::Literal_Boolean: {
-				node->type = Type { Type_Kind::Boolean };
+				node->type = Type::Boolean();
 				typechecked_node = node;
 			} break;
 			case AST_Kind::Literal_Character: {
-				node->type = Type { Type_Kind::Character };
+				node->type = Type::Character();
 				typechecked_node = node;
 			} break;
 			case AST_Kind::Literal_Integer: {
-				node->type = Type { Type_Kind::Integer };
+				AST_Literal *literal = dynamic_cast<AST_Literal *>(node);
+				internal_verify(literal, "Failed to cast to `AST_Literal *`");
+
+				Size literal_size = minimum_required_size_for_literal(literal->as.integer);
+				node->type = Type::Integer(literal_size);
 				typechecked_node = node;
 			} break;
 			case AST_Kind::Literal_Floating_Point: {
-				node->type = Type { Type_Kind::Floating_Point };
+				AST_Literal *literal = dynamic_cast<AST_Literal *>(node);
+				internal_verify(literal, "Failed to cast to `AST_Literal *`");
+
+				Size literal_size = minimum_required_size_for_literal(literal->as.floating_point);
+				node->type = Type::Floating_Point(literal_size);
 				typechecked_node = node;
 			} break;
 			case AST_Kind::Literal_String: {
-				node->type = Type { Type_Kind::String };
+				node->type = Type::String();
 				typechecked_node = node;
 			} break;
 
@@ -1791,9 +1888,9 @@ struct Typechecker {
 				internal_verify(unary, "Failed to cast to `AST_Unary *`");
 
 				unary->sub = try_(typecheck(unary->sub));
-				verify(unary->sub->type->kind == Type_Kind::Boolean, unary->sub->location, "Type mismatch! `!` expects `%s` but was given `%s`", display_str(Type_Kind::Boolean).c_str(), unary->sub->type->display_str().c_str());
+				verify(unary->sub->type->kind == Type_Kind::Boolean, unary->sub->location, "Type mismatch! `!` expects `%s` but was given `%s`", Type::Boolean().display_str().c_str(), unary->sub->type->display_str().c_str());
 
-				unary->type = Type { Type_Kind::Boolean };
+				unary->type = Type::Boolean();
 				typechecked_node = unary;
 			} break;
 			case AST_Kind::Unary_Negate: {
@@ -1979,7 +2076,7 @@ struct Typechecker {
 					binary->lhs->type->kind == binary->rhs->type->kind,
 					binary->location,
 					"Type mismatch! `&&` expects its arguments to be `%s`",
-					display_str(Type_Kind::Boolean).c_str()
+					Type::Boolean().display_str().c_str()
 				);
 
 				binary->type = binary->lhs->type;
@@ -2008,7 +2105,7 @@ struct Typechecker {
 					binary->lhs->type->kind == binary->rhs->type->kind,
 					binary->location,
 					"Type mismatch! `||` expects its arguments to be `%s`",
-					display_str(Type_Kind::Boolean).c_str()
+					Type::Boolean().display_str().c_str()
 				);
 
 				binary->type = binary->lhs->type;
@@ -2058,7 +2155,7 @@ Result<String> read_entire_file(const char *path) {
 	file.seekg(0, std::ios::beg);
 	
 	auto source = String { static_cast<size_t>(size), reinterpret_cast<char *>(malloc(size)) };
-	file.read(source.data, size);
+	file.read(source.chars, size);
 	verify(file.good(), "Could not read from '%s'.", path);
 	
 	return source;
@@ -2073,7 +2170,9 @@ int main(int argc, const char **argv) {
 	const char *filename = argv[1];
 
 	String source = read_entire_file(filename).unwrap();
-	AST_Block *ast = parse(source, filename).unwrap();
+	AST_Block *ast = parse(source, filename);
+	if (!ast) return EXIT_FAILURE;
+
 	ast->debug_print();
 
 	ast = dynamic_cast<AST_Block *>(typecheck(ast).unwrap());
