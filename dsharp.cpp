@@ -97,9 +97,9 @@ std::string debug_str(const std::optional<T>& option) {
 }
 
 Size minimum_required_size_for_literal(int64_t value) {
-	if (value <= std::numeric_limits<Runtime_Type::Integer8>::max()) return sizeof(Runtime_Type::Integer8);
-	if (value <= std::numeric_limits<Runtime_Type::Integer16>::max()) return sizeof(Runtime_Type::Integer16);
-	if (value <= std::numeric_limits<Runtime_Type::Integer32>::max()) return sizeof(Runtime_Type::Integer32);
+	if (value <= std::numeric_limits<Runtime_Type::Integer8>::max() && value >= std::numeric_limits<Runtime_Type::Integer8>::min()) return sizeof(Runtime_Type::Integer8);
+	if (value <= std::numeric_limits<Runtime_Type::Integer16>::max() && value >= std::numeric_limits<Runtime_Type::Integer16>::min()) return sizeof(Runtime_Type::Integer16);
+	if (value <= std::numeric_limits<Runtime_Type::Integer32>::max() && value >= std::numeric_limits<Runtime_Type::Integer32>::min()) return sizeof(Runtime_Type::Integer32);
 	return sizeof(Runtime_Type::Integer64);
 }
 
@@ -1681,7 +1681,27 @@ struct Parser {
 				node = try_(parse_unary(AST_Kind::Unary_Not, location));
 				break;
 			case Token_Kind::Punctuation_Dash:
-				node = try_(parse_unary(AST_Kind::Unary_Negate, location));
+				if (check(Token_Kind::Literal_Integer)) {
+					Token literal_token = try_(tokenizer.next());
+					AST_Literal *literal = dynamic_cast<AST_Literal *>(try_(parse_prefix(literal_token)));
+					internal_verify(literal, "Failed to cast to `AST_Literal *`");
+
+					literal->as.integer = -literal->as.integer;
+					literal->location = location;
+
+					node = literal;
+				} else if (check(Token_Kind::Literal_Floating_Point)) {
+					Token literal_token = try_(tokenizer.next());
+					AST_Literal *literal = dynamic_cast<AST_Literal *>(try_(parse_prefix(literal_token)));
+					internal_verify(literal, "Failed to cast to `AST_Literal *`");
+
+					literal->as.floating_point = -literal->as.floating_point;
+					literal->location = location;
+
+					node = literal;
+				} else {
+					node = try_(parse_unary(AST_Kind::Unary_Negate, location));
+				}
 				break;
 
 			default:
