@@ -333,70 +333,70 @@ enum class Type_Kind {
 };
 
 std::string debug_str(Type_Kind kind) {
-		std::string s;
+	std::string s;
 
-		switch (kind) {
-			case Type_Kind::No_Type: {
-				s = "No_Type";
-			} break;
-			case Type_Kind::Null: {
-				s = "Null";
-			} break;
-			case Type_Kind::Boolean: {
-				s = "Boolean";
-			} break;
-			case Type_Kind::Character: {
-				s = "Character";
-			} break;
-			case Type_Kind::Integer: {
-				s = "Integer";
-			} break;
-			case Type_Kind::Floating_Point: {
-				s = "Floating_Point";
-			} break;
-			case Type_Kind::String: {
-				s = "String";
-			} break;
+	switch (kind) {
+		case Type_Kind::No_Type: {
+			s = "No_Type";
+		} break;
+		case Type_Kind::Null: {
+			s = "Null";
+		} break;
+		case Type_Kind::Boolean: {
+			s = "Boolean";
+		} break;
+		case Type_Kind::Character: {
+			s = "Character";
+		} break;
+		case Type_Kind::Integer: {
+			s = "Integer";
+		} break;
+		case Type_Kind::Floating_Point: {
+			s = "Floating_Point";
+		} break;
+		case Type_Kind::String: {
+			s = "String";
+		} break;
 
-			default:
-				s = std::to_string(static_cast<int>(kind));
-				break;
-		}
-
-		return s;
+		default:
+			s = std::to_string(static_cast<int>(kind));
+			break;
 	}
+
+	return s;
+}
 
 std::string display_str(Type_Kind kind) {
 	std::string s;
 	
 	switch (kind) {
-			case Type_Kind::No_Type: {
-				s = "!";
-			} break;
-			case Type_Kind::Null: {
-				s = "Null";
-			} break;
-			case Type_Kind::Boolean: {
-				s = "bool";
-			} break;
-			case Type_Kind::Character: {
-				s = "char";
-			} break;
-			case Type_Kind::Integer: {
-				s = "int";
-			} break;
-			case Type_Kind::Floating_Point: {
-				s = "float";
-			} break;
-			case Type_Kind::String: {
-				s = "string";
-			} break;
+		case Type_Kind::No_Type: {
+			s = "!";
+		} break;
+		case Type_Kind::Null: {
+			s = "Null";
+		} break;
+		case Type_Kind::Boolean: {
+			s = "bool";
+		} break;
+		case Type_Kind::Character: {
+			s = "char";
+		} break;
+		case Type_Kind::Integer: {
+			s = "int";
+		} break;
+		case Type_Kind::Floating_Point: {
+			s = "float";
+		} break;
+		case Type_Kind::String: {
+			s = "string";
+		} break;
+		
+		default:
+			internal_error("Unhandled Type_Kind: %s!", debug_str(kind).c_str());
+	}
 
-			default:
-				internal_error("Unhandled Type_Kind: %s!", debug_str(kind).c_str());
-		}
-
-		return s;
+	return s;
 }
 
 union Type_Data {
@@ -1681,7 +1681,7 @@ struct Parser {
 			block->nodes.push_back(node);
 		}
 
-		auto right_curly = try_(skip_expect(Token_Kind::Delimeter_Right_Curly, "Expected `}` to terminate block!"));
+		try_(skip_expect(Token_Kind::Delimeter_Right_Curly, "Expected `}` to terminate block!"));
 		block->location = location;
 
 		return block;
@@ -1711,7 +1711,6 @@ struct Parser {
 
 			node = binary;
 		} else {
-			previous->debug_print();
 			todo("Variable declarations not yet implemented.");
 		}
 
