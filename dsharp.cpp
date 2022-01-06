@@ -15,6 +15,8 @@
 //		Tokenizer currently only really supports ASCII.
 // - HandleStringData
 //		Identifier and string literal Tokens currently point to the source code.
+// - TypeEquality
+//		Implement proper equality checks for `Type`s.
 //
 //
 
@@ -330,15 +332,7 @@ enum class Type_Kind {
 	String,
 };
 
-union Type_Data {
-
-};
-
-struct Type {
-	Type_Kind kind;
-	Type_Data data;
-
-	std::string debug_str() const {
+std::string debug_str(Type_Kind kind) {
 		std::string s;
 
 		switch (kind) {
@@ -367,6 +361,91 @@ struct Type {
 			default:
 				s = std::to_string(static_cast<int>(kind));
 				break;
+		}
+
+		return s;
+	}
+
+std::string display_str(Type_Kind kind) {
+	std::string s;
+	
+	switch (kind) {
+			case Type_Kind::No_Type: {
+				s = "!";
+			} break;
+			case Type_Kind::Null: {
+				s = "Null";
+			} break;
+			case Type_Kind::Boolean: {
+				s = "bool";
+			} break;
+			case Type_Kind::Character: {
+				s = "char";
+			} break;
+			case Type_Kind::Integer: {
+				s = "int";
+			} break;
+			case Type_Kind::Floating_Point: {
+				s = "float";
+			} break;
+			case Type_Kind::String: {
+				s = "string";
+			} break;
+
+			default:
+				internal_error("Unhandled Type_Kind: %s!", debug_str(kind).c_str());
+		}
+
+		return s;
+}
+
+union Type_Data {
+
+};
+
+struct Type {
+	Type_Kind kind;
+	Type_Data data;
+
+	std::string debug_str() const {
+		std::string s;
+
+		switch (kind) {
+			// primitive types
+			case Type_Kind::No_Type:
+			case Type_Kind::Null:
+			case Type_Kind::Boolean:
+			case Type_Kind::Character:
+			case Type_Kind::Integer:
+			case Type_Kind::Floating_Point:
+			case Type_Kind::String:
+				s = ::debug_str(kind);
+				break;
+
+			default:
+				s = std::to_string(static_cast<int>(kind));
+				break;
+		}
+
+		return s;
+	}
+
+	std::string display_str() const {
+		std::string s;
+
+		switch (kind) {
+			case Type_Kind::No_Type:
+			case Type_Kind::Null:
+			case Type_Kind::Boolean:
+			case Type_Kind::Character:
+			case Type_Kind::Integer:
+			case Type_Kind::Floating_Point:
+			case Type_Kind::String:
+				s = ::display_str(kind);
+				break;
+
+			default:
+				internal_error("Unhandled Type_Kind: %s!", ::debug_str(kind).c_str());
 		}
 
 		return s;
@@ -418,6 +497,7 @@ std::string debug_str(AST_Kind kind) {
 		CASE(Literal_Character);
 		CASE(Literal_Integer);
 		CASE(Literal_Floating_Point);
+		CASE(Literal_String);
 		CASE(Unary_Not);
 		CASE(Unary_Negate);
 		CASE(Binary_Variable_Instantiation);
@@ -590,6 +670,18 @@ void AST::debug_print(size_t indentation) const {
 			printf("%*svalue: %f\n", 
 				static_cast<int>(Print_Indentation_Size * (indentation + 1)), "",
 				self->as.floating_point
+			);
+		} break;
+		case AST_Kind::Literal_String: {
+			const AST_Literal *self = dynamic_cast<const AST_Literal *>(this);
+			internal_verify(self, "Failed to cast to `const AST_Literal *`");
+
+			printf("`Literal_String`:\n");
+			print_base_members(indentation);
+
+			printf("%*svalue: %.*s\n",
+				static_cast<int>(Print_Indentation_Size * (indentation + 1)), "",
+				static_cast<int>(self->as.string.size), self->as.string.data
 			);
 		} break;
 
@@ -1627,7 +1719,7 @@ struct Parser {
 	}
 };
 
-AST_Block *parse(String source, const char *filename) {
+Result<AST_Block *> parse(String source, const char *filename) {
 	Parser p;
 	p.error = false;
 	p.tokenizer.source = source;
@@ -1651,7 +1743,306 @@ AST_Block *parse(String source, const char *filename) {
 		ast->nodes.push_back(result.ok());
 	}
 
-	return p.error ? nullptr : ast;
+	return p.error ? Result<AST_Block *> { "Could not parse program!" } : Result<AST_Block *> { ast };
+}
+
+//
+//
+// Typechecking
+//
+//
+
+struct Typechecker {
+
+	Result<AST *> typecheck(AST *node) {
+		AST *typechecked_node = nullptr;
+
+		switch (node->kind) {
+			case AST_Kind::Symbol_Identifier: {
+				todo("typecheck identifiers!");
+			} break;
+
+			case AST_Kind::Literal_Null: {
+				node->type = Type { Type_Kind::Null };
+				typechecked_node = node;
+			} break;
+			case AST_Kind::Literal_Boolean: {
+				node->type = Type { Type_Kind::Boolean };
+				typechecked_node = node;
+			} break;
+			case AST_Kind::Literal_Character: {
+				node->type = Type { Type_Kind::Character };
+				typechecked_node = node;
+			} break;
+			case AST_Kind::Literal_Integer: {
+				node->type = Type { Type_Kind::Integer };
+				typechecked_node = node;
+			} break;
+			case AST_Kind::Literal_Floating_Point: {
+				node->type = Type { Type_Kind::Floating_Point };
+				typechecked_node = node;
+			} break;
+			case AST_Kind::Literal_String: {
+				node->type = Type { Type_Kind::String };
+				typechecked_node = node;
+			} break;
+
+			case AST_Kind::Unary_Not: {
+				AST_Unary *unary = dynamic_cast<AST_Unary *>(node);
+				internal_verify(unary, "Failed to cast to `AST_Unary *`");
+
+				unary->sub = try_(typecheck(unary->sub));
+				verify(unary->sub->type->kind == Type_Kind::Boolean, unary->sub->location, "Type mismatch! `!` expects `%s` but was given `%s`", display_str(Type_Kind::Boolean).c_str(), unary->sub->type->display_str().c_str());
+
+				unary->type = Type { Type_Kind::Boolean };
+				typechecked_node = unary;
+			} break;
+			case AST_Kind::Unary_Negate: {
+				AST_Unary *unary = dynamic_cast<AST_Unary *>(node);
+				internal_verify(unary, "Failed to cast to `AST_Unary *`");
+
+				unary->sub = try_(typecheck(unary->sub));
+				verify(
+					unary->sub->type->kind == Type_Kind::Integer || unary->sub->type->kind == Type_Kind::Floating_Point,
+					unary->sub->location,
+					"Type mismatch! `-` expects its argument to be a numeric value but was given `%s`",
+					unary->sub->type->display_str().c_str()
+				);
+
+				unary->type = unary->sub->type;
+				typechecked_node = unary;
+			} break;
+
+			case AST_Kind::Binary_Variable_Instantiation: {
+				todo("Not yet implemented!");
+			} break;
+			case AST_Kind::Binary_Constant_Instantiation: {
+				todo("Not yet implemented!");
+			} break;
+			case AST_Kind::Binary_Variable_Declaration: {
+				todo("Not yet implemented!");
+			} break;
+			case AST_Kind::Binary_Assignment: {
+				AST_Binary *binary = dynamic_cast<AST_Binary*>(node);
+				internal_verify(binary, "Failed to cast to `AST_Binary *`");
+
+				binary->lhs = try_(typecheck(binary->lhs));
+				binary->rhs = try_(typecheck(binary->rhs));
+
+				// @TODO:
+				// :TypeEquality
+				//
+				verify(binary->lhs->type->kind == binary->rhs->type->kind, binary->rhs->location, "Type mismatch! Cannot assign `%s` to `%s`", binary->rhs->type->display_str().c_str(), binary->lhs->type->display_str().c_str());
+
+				binary->type = Type { Type_Kind::No_Type };
+				typechecked_node = binary;
+			} break;
+			case AST_Kind::Binary_Add: {
+				AST_Binary *binary = dynamic_cast<AST_Binary*>(node);
+				internal_verify(binary, "Failed to cast to `AST_Binary *`");
+
+				binary->lhs = try_(typecheck(binary->lhs));
+				binary->rhs = try_(typecheck(binary->rhs));
+
+				verify(
+					binary->lhs->type->kind == Type_Kind::Integer || binary->lhs->type->kind ==Type_Kind::Floating_Point,
+					binary->lhs->location,
+					"Type mismatch! `+` expects its arguments to be numeric values but was given `%s`",
+					binary->lhs->type->display_str().c_str()
+				);
+				verify(
+					binary->rhs->type->kind == Type_Kind::Integer || binary->rhs->type->kind ==Type_Kind::Floating_Point,
+					binary->rhs->location,
+					"Type mismatch! `+` expects its arguments to be numeric values but was given `%s`",
+					binary->rhs->type->display_str().c_str()
+				);
+				verify(
+					binary->lhs->type->kind == binary->rhs->type->kind,
+					binary->location,
+					"Type mismatch! `+` expects its arguments to be the same type. `%s` vs. `%s`",
+					binary->lhs->type->display_str().c_str(),
+					binary->rhs->type->display_str().c_str()
+				);
+
+				binary->type = binary->lhs->type;
+				typechecked_node = binary;
+			} break;
+			case AST_Kind::Binary_Subtract: {
+				AST_Binary *binary = dynamic_cast<AST_Binary*>(node);
+				internal_verify(binary, "Failed to cast to `AST_Binary *`");
+
+				binary->lhs = try_(typecheck(binary->lhs));
+				binary->rhs = try_(typecheck(binary->rhs));
+
+				verify(
+					binary->lhs->type->kind == Type_Kind::Integer || binary->lhs->type->kind ==Type_Kind::Floating_Point,
+					binary->lhs->location,
+					"Type mismatch! `-` expects its arguments to be numeric values but was given `%s`",
+					binary->lhs->type->display_str().c_str()
+				);
+				verify(
+					binary->rhs->type->kind == Type_Kind::Integer || binary->rhs->type->kind ==Type_Kind::Floating_Point,
+					binary->rhs->location,
+					"Type mismatch! `-` expects its arguments to be numeric values but was given `%s`",
+					binary->rhs->type->display_str().c_str()
+				);
+				verify(
+					binary->lhs->type->kind == binary->rhs->type->kind,
+					binary->location,
+					"Type mismatch! `-` expects its arguments to be the same type. `%s` vs. `%s`",
+					binary->lhs->type->display_str().c_str(),
+					binary->rhs->type->display_str().c_str()
+				);
+
+				binary->type = binary->lhs->type;
+				typechecked_node = binary;
+			} break;
+			case AST_Kind::Binary_Multiply: {
+				AST_Binary *binary = dynamic_cast<AST_Binary*>(node);
+				internal_verify(binary, "Failed to cast to `AST_Binary *`");
+
+				binary->lhs = try_(typecheck(binary->lhs));
+				binary->rhs = try_(typecheck(binary->rhs));
+
+				verify(
+					binary->lhs->type->kind == Type_Kind::Integer || binary->lhs->type->kind ==Type_Kind::Floating_Point,
+					binary->lhs->location,
+					"Type mismatch! `*` expects its arguments to be numeric values but was given `%s`",
+					binary->lhs->type->display_str().c_str()
+				);
+				verify(
+					binary->rhs->type->kind == Type_Kind::Integer || binary->rhs->type->kind ==Type_Kind::Floating_Point,
+					binary->rhs->location,
+					"Type mismatch! `*` expects its arguments to be numeric values but was given `%s`",
+					binary->rhs->type->display_str().c_str()
+				);
+				verify(
+					binary->lhs->type->kind == binary->rhs->type->kind,
+					binary->location,
+					"Type mismatch! `*` expects its arguments to be the same type. `%s` vs. `%s`",
+					binary->lhs->type->display_str().c_str(),
+					binary->rhs->type->display_str().c_str()
+				);
+
+				binary->type = binary->lhs->type;
+				typechecked_node = binary;
+			} break;
+			case AST_Kind::Binary_Divide: {
+				AST_Binary *binary = dynamic_cast<AST_Binary*>(node);
+				internal_verify(binary, "Failed to cast to `AST_Binary *`");
+
+				binary->lhs = try_(typecheck(binary->lhs));
+				binary->rhs = try_(typecheck(binary->rhs));
+
+				verify(
+					binary->lhs->type->kind == Type_Kind::Integer || binary->lhs->type->kind ==Type_Kind::Floating_Point,
+					binary->lhs->location,
+					"Type mismatch! `/` expects its arguments to be numeric values but was given `%s`",
+					binary->lhs->type->display_str().c_str()
+				);
+				verify(
+					binary->rhs->type->kind == Type_Kind::Integer || binary->rhs->type->kind ==Type_Kind::Floating_Point,
+					binary->rhs->location,
+					"Type mismatch! `/` expects its arguments to be numeric values but was given `%s`",
+					binary->rhs->type->display_str().c_str()
+				);
+				verify(
+					binary->lhs->type->kind == binary->rhs->type->kind,
+					binary->location,
+					"Type mismatch! `/` expects its arguments to be the same type. `%s` vs. `%s`",
+					binary->lhs->type->display_str().c_str(),
+					binary->rhs->type->display_str().c_str()
+				);
+
+				binary->type = binary->lhs->type;
+				typechecked_node = binary;
+			} break;
+			case AST_Kind::Binary_And: {
+				AST_Binary *binary = dynamic_cast<AST_Binary*>(node);
+				internal_verify(binary, "Failed to cast to `AST_Binary *`");
+
+				binary->lhs = try_(typecheck(binary->lhs));
+				binary->rhs = try_(typecheck(binary->rhs));
+
+				verify(
+					binary->lhs->type->kind == Type_Kind::Boolean,
+					binary->lhs->location,
+					"Type mismatch! `&&` expects its arguments to be numeric values but was given `%s`",
+					binary->lhs->type->display_str().c_str()
+				);
+				verify(
+					binary->rhs->type->kind == Type_Kind::Boolean,
+					binary->rhs->location,
+					"Type mismatch! `&&` expects its arguments to be numeric values but was given `%s`",
+					binary->rhs->type->display_str().c_str()
+				);
+				verify(
+					binary->lhs->type->kind == binary->rhs->type->kind,
+					binary->location,
+					"Type mismatch! `&&` expects its arguments to be `%s`",
+					display_str(Type_Kind::Boolean).c_str()
+				);
+
+				binary->type = binary->lhs->type;
+				typechecked_node = binary;
+			} break;
+			case AST_Kind::Binary_Or: {
+				AST_Binary *binary = dynamic_cast<AST_Binary*>(node);
+				internal_verify(binary, "Failed to cast to `AST_Binary *`");
+
+				binary->lhs = try_(typecheck(binary->lhs));
+				binary->rhs = try_(typecheck(binary->rhs));
+
+				verify(
+					binary->lhs->type->kind == Type_Kind::Boolean,
+					binary->lhs->location,
+					"Type mismatch! `||` expects its arguments to be numeric values but was given `%s`",
+					binary->lhs->type->display_str().c_str()
+				);
+				verify(
+					binary->rhs->type->kind == Type_Kind::Boolean,
+					binary->rhs->location,
+					"Type mismatch! `||` expects its arguments to be numeric values but was given `%s`",
+					binary->rhs->type->display_str().c_str()
+				);
+				verify(
+					binary->lhs->type->kind == binary->rhs->type->kind,
+					binary->location,
+					"Type mismatch! `||` expects its arguments to be `%s`",
+					display_str(Type_Kind::Boolean).c_str()
+				);
+
+				binary->type = binary->lhs->type;
+				typechecked_node = binary;
+			} break;
+
+			case AST_Kind::Block: {
+				AST_Block *block = dynamic_cast<AST_Block *>(node);
+				internal_verify(block, "Failed to cast to `AST_Block *`");
+
+				for (size_t i = 0; i < block->nodes.size(); i++) {
+					block->nodes[i] = try_(typecheck(block->nodes[i]));
+				}
+
+				block->type = Type { Type_Kind::No_Type };
+				typechecked_node = block;
+			} break;
+
+			case AST_Kind::If: {
+				todo("Not yet implemented!");
+			} break;
+
+			default:
+				internal_error("Unhandled AST_Kind: %s!\n", debug_str(node->kind).c_str());
+		}
+
+		return typechecked_node;
+	}
+};
+
+Result<AST *> typecheck(AST *ast) {
+	auto t = Typechecker {};
+	return t.typecheck(ast);
 }
 
 //
@@ -1683,10 +2074,13 @@ int main(int argc, const char **argv) {
 	const char *filename = argv[1];
 
 	String source = read_entire_file(filename).unwrap();
-	AST_Block *ast = parse(source, filename);
-	if (ast) {
-		ast->debug_print();
-	}
+	AST_Block *ast = parse(source, filename).unwrap();
+	ast->debug_print();
+
+	ast = dynamic_cast<AST_Block *>(typecheck(ast).unwrap());
+	internal_verify(ast, "`typecheck()` didn't return an `AST_Block`");
+
+	ast->debug_print();
 
 	source.free();
 	return 0;
