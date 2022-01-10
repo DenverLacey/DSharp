@@ -1433,11 +1433,17 @@ struct Tokenizer {
 				token = make_token(Token_Kind::Punctuation_Slash);
 			} break;
 			case '&': {
-				if (peek_char() == '&') {
-					next_char();
+				if (match_char(c, '&')) {
 					token = make_token(Token_Kind::Punctuation_Ampersand_Ampersand);
 				} else {
 					todo("Implement `&` tokenization.");
+				}
+			} break;
+			case '|': {
+				if (match_char(c, '|')) {
+					token = make_token(Token_Kind::Punctuation_Pipe_Pipe);
+				} else {
+					todo("Implement `|` tokenization.");
 				}
 			} break;
 
@@ -2145,7 +2151,22 @@ struct Typechecker {
 			} break;
 
 			case AST_Kind::If: {
-				todo("Not yet implemented!");
+				AST_If *if_ = dynamic_cast<AST_If *>(node);
+				internal_verify(if_, "Failed to cast to `AST_If *`");
+
+				if_->condition = try_(typecheck(if_->condition));
+				verify(
+					if_->condition->type->kind == Type_Kind::Boolean, 
+					if_->condition->location, 
+					"Type mismatch! Expected boolean expression as conditional of `if` statement but expression evaluates to `%s`", 
+					if_->condition->type->display_str().c_str()
+				);
+
+				if_->then_block = try_(typecheck(if_->then_block));
+				if (if_->else_block) if_->else_block = try_(typecheck(if_->else_block));
+
+				if_->type = Type { Type_Kind::No_Type };
+				typechecked_node = if_;
 			} break;
 
 			default:

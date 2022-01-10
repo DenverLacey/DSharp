@@ -1,3 +1,5 @@
--255 + 2
-true && false
-5.0 - 33.66
+if true || false {
+	"then-block"
+} else {
+	"else-block"
+}
