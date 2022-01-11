@@ -1867,6 +1867,173 @@ AST_Block *parse(String source, const char *filename) {
 //
 
 struct Typechecker {
+	//
+	// Child Data Structures
+	//
+	struct Binding {
+		enum {
+			Variable,
+			Type,
+			Function,
+			Module,
+		} kind;
+
+		struct Function_Binding {
+			PID pid;
+			::Type type;
+		};
+
+		union {
+			::Type type;
+			Function_Binding fn;
+			// ::Module *mod;
+		};
+
+		static Binding variable(::Type type) {
+			return Binding { 
+				.kind = Variable,
+				.type = type
+			};
+		}
+
+		static Binding type(::Type type) {
+			return Binding { 
+				.kind = Type, 
+				.type = type 
+			};
+		}
+
+		static Binding function(PID pid, ::Type fn_type) {
+			return Binding { 
+				.kind = Function, 
+				.fn = { 
+					.pid = pid, 
+					.type = fn_type 
+				} 
+			};
+		}
+
+		/* @TODO:
+			for when we implement modules
+		static Binding module(::Module *module) {
+			return Binding {
+				.kind = Module,
+				.mod = module
+			};
+		}
+		*/
+	};
+
+	struct Scope {
+		std::unordered_map<std::string, Binding> bindings;
+	};
+
+	//
+	// Fields
+	//
+	// Interpreter *interp;
+	// Module *module;
+	Scope *global_scope;
+	// Function_Definition *function;
+	Typechecker *parent;
+	// bool has_return;
+	std::forward_list<Scope> scopes;
+
+	//
+	// Constructor B.S
+	//
+	Typechecker() = default;
+
+	/*
+	Typechecker(Interpreter *interp, Module *module) {
+		this->interp = interp;
+		this->module = module;
+		this->function = nullptr;
+		this->parent = nullptr;
+		this->has_return = false;
+		begin_scope(); // global scope
+		global_scope = &current_scope();
+	}
+	*/
+
+	/*
+	Typechecker(Typer &t, Function_Definition *function) {
+		this->interp = t.interp;
+		this->module = t.module;
+		this->global_scope = t.global_scope;
+		this->function = function;
+		this->parent = &t;
+		this->has_return = false;
+	}
+	*/
+
+	Scope &current_scope() {
+		return scopes.front();
+	}
+
+	void begin_scope() {
+		scopes.push_front(Scope{});
+	}
+
+	void end_scope() {
+		scopes.pop_front();
+	}
+
+	std::optional<Binding> find_binding_by_id(const std::string &id, bool checking_through_parent = false) {
+		for (Scope &scope : scopes) {
+			auto it = scope.bindings.find(id);
+			if (it == scope.bindings.end()) continue;
+			if (checking_through_parent && it->second.kind == Binding::Variable) continue;
+			return it->second;
+		}
+
+		if (parent) {
+			auto optional_binding = parent->find_binding_by_id(id, true);
+			if (optional_binding.has_value()) {
+				return *optional_binding;
+			}
+		}
+
+		if (!checking_through_parent) {
+			auto it = global_scope->bindings.find(id);
+			if (it != global_scope->bindings.end()) {
+				return it->second;
+			}
+		}
+
+		return {};
+	}
+
+	Result<void> put_binding(Code_Location location, const std::string &id, Binding binding) {
+		Scope &scope = current_scope();
+
+		auto it = scope.bindings.find(id);
+		verify(it == scope.bindings.end(), location, "Redefinition of `%s`", id.c_str());
+
+		scope.bindings[id] = binding;
+
+		return {};
+	}
+
+	Result<void> bind_variable(Code_Location location, const std::string &id, Type type) {
+		return put_binding(location, id, Binding::variable(type));
+	}
+
+	Result<void> bind_type(Code_Location location, const std::string &id, Type type) {
+		internal_verify(type.kind == Type_Kind::Type, "Attempted to bind a type name to something other than a type! `%s` to `%s`", id.c_str(), type.debug_str().c_str());
+		return put_binding(location, id, Binding::type(type));
+	}
+
+	Result<void> bind_function(Code_Location location, const std::string &id, PID pid, Type type) {
+		internal_verify(type.kind == Type_Kind::Function, "Attempted to bind a function name to something other than a function-type! `%s` to `%s`", id.c_str(), type.debug_str().c_str());
+		return put_binding(location, id, Binding::function(pid, type));
+	}
+
+	/*
+	Result<void> bind_module(Code_Location location, const std::string &id, Module *module) {
+		return put_binding(location, id, Binding::module(module));
+	}
+	*/
 
 	Result<AST *> typecheck(AST *node) {
 		AST *typechecked_node = nullptr;
