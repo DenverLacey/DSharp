@@ -8,6 +8,8 @@
 #include <fstream>
 #include <stdarg.h>
 #include <limits>
+#include <forward_list>
+#include <unordered_map>
 
 //
 //
@@ -29,6 +31,7 @@
 //
 //
 
+using PID = size_t;
 using Size = size_t;
 using Address = uint16_t;
 
@@ -560,8 +563,6 @@ enum class AST_Kind {
 	Unary_Not,
 	Unary_Negate,
 
-	Binary_Variable_Instantiation,
-	Binary_Constant_Instantiation,
 	Binary_Variable_Declaration,
 	Binary_Assignment,
 	Binary_Add,
@@ -570,9 +571,13 @@ enum class AST_Kind {
 	Binary_Divide,
 	Binary_And,
 	Binary_Or,
+	Binary_EQ,
+	Binary_NE,
 
 	Block,
 
+	Variable_Instantiation,
+	Constant_Instantiation,
 	If,
 };
 
@@ -589,8 +594,6 @@ std::string debug_str(AST_Kind kind) {
 		CASE(Literal_String);
 		CASE(Unary_Not);
 		CASE(Unary_Negate);
-		CASE(Binary_Variable_Instantiation);
-		CASE(Binary_Constant_Instantiation);
 		CASE(Binary_Variable_Declaration);
 		CASE(Binary_Assignment);
 		CASE(Binary_Add);
@@ -599,7 +602,11 @@ std::string debug_str(AST_Kind kind) {
 		CASE(Binary_Divide);
 		CASE(Binary_And);
 		CASE(Binary_Or);
+		CASE(Binary_EQ);
+		CASE(Binary_NE);
 		CASE(Block);
+		CASE(Variable_Instantiation);
+		CASE(Constant_Instantiation);
 		CASE(If);
 
 		default:
@@ -665,28 +672,38 @@ struct AST_Block : AST {
 struct AST_If : AST {
 	AST *condition;
 	AST *then_block;
-	AST *else_block;
+	AST *else_block; // optional
+};
+
+struct AST_Variable_Instantiation : AST {
+	AST_Symbol *symbol;
+	struct AST_Type_Signature *specified_type; // optional
+	AST *initializer;
+};
+
+struct AST_Type_Signature : AST {
+	Type value_type;
 };
 
 void AST::debug_print(size_t indentation) const {
-	#define CASE_UNARY(kind, name) case AST_Kind::kind: {\
+	#define CASE_UNARY(kind) case AST_Kind::kind: {\
 		const AST_Unary *self = dynamic_cast<const AST_Unary *>(this);\
 		internal_verify(self, "Failed to cast to `const AST_Unary *`");\
-		printf("`" name "`:\n");\
+		printf("`%s`:\n", debug_str(AST_Kind::kind).c_str());\
 		print_unary(self, indentation);\
 	} break
 	
-	#define CASE_BINARY(kind, name) case AST_Kind::kind: {\
+	#define CASE_BINARY(kind) case AST_Kind::kind: {\
 		const AST_Binary *self = dynamic_cast<const AST_Binary *>(this);\
 		internal_verify(self, "Faield to cast to `const AST_Binary *`");\
-		printf("`" name "`:\n");\
+		printf("`%s`:\n", debug_str(AST_Kind::kind).c_str());\
 		print_binary(self, indentation);\
 	} break
 
-	#define CASE_BLOCK(kind, name) case AST_Kind::kind: {\
+	#define CASE_BLOCK(kind) case AST_Kind::kind: {\
 		const AST_Block *self = dynamic_cast<const AST_Block *>(this);\
 		internal_verify(self, "Failed to cast to `const AST_Block *`");\
-		printf("`" name "`:\n");\
+		printf("`%s`:\n", debug_str(AST_Kind::kind).c_str());\
 		print_block(self, indentation);\
 	} break
 
@@ -774,22 +791,34 @@ void AST::debug_print(size_t indentation) const {
 			);
 		} break;
 
-		CASE_UNARY(Unary_Not, "!");
-		CASE_UNARY(Unary_Negate, "-");
+		CASE_UNARY(Unary_Not);
+		CASE_UNARY(Unary_Negate);
 		
-		CASE_BINARY(Binary_Variable_Instantiation, ":=");
-		CASE_BINARY(Binary_Constant_Instantiation, "::");
-		CASE_BINARY(Binary_Variable_Declaration, ":");
-		CASE_BINARY(Binary_Assignment, "=");
-		CASE_BINARY(Binary_Add, "+");
-		CASE_BINARY(Binary_Subtract, "-");
-		CASE_BINARY(Binary_Multiply, "*");
-		CASE_BINARY(Binary_Divide, "/");
-		CASE_BINARY(Binary_And, "&&");
-		CASE_BINARY(Binary_Or, "||");
+		CASE_BINARY(Binary_Variable_Declaration);
+		CASE_BINARY(Binary_Assignment);
+		CASE_BINARY(Binary_Add);
+		CASE_BINARY(Binary_Subtract);
+		CASE_BINARY(Binary_Multiply);
+		CASE_BINARY(Binary_Divide);
+		CASE_BINARY(Binary_And);
+		CASE_BINARY(Binary_Or);
+		CASE_BINARY(Binary_EQ);
+		CASE_BINARY(Binary_NE);
 
-		CASE_BLOCK(Block, "{}");
+		CASE_BLOCK(Block);
 
+		case AST_Kind::Variable_Instantiation:
+		case AST_Kind::Constant_Instantiation: {
+			const AST_Variable_Instantiation *self = dynamic_cast<const AST_Variable_Instantiation *>(this);
+			internal_verify(self, "Failed to cast to `const AST_Literal_Instantiation *`");
+
+			printf("`%s`:\n", debug_str(kind).c_str());
+			print_base_members(indentation);
+
+			print_member("symbol", indentation, self->symbol);
+			if (self->specified_type) print_member("type", indentation, self->specified_type);
+			print_member("initializer", indentation, self->initializer);
+		} break;
 		case AST_Kind::If: {
 			const AST_If *self = dynamic_cast<const AST_If *>(this);
 			internal_verify(self, "Failed to cast to `const AST_If *`");
@@ -921,7 +950,9 @@ enum class Token_Kind {
 
 	// punctuation
 	Punctuation_Bang,
+	Punctuation_Bang_Equal,
 	Punctuation_Equal,
+	Punctuation_Equal_Equal,
 	Punctuation_Colon,
 	Punctuation_Plus,
 	Punctuation_Dash,
@@ -962,7 +993,9 @@ std::string debug_str(Token_Kind kind) {
 
 		// punctuation
 		CASE(Punctuation_Bang);
+		CASE(Punctuation_Bang_Equal);
 		CASE(Punctuation_Equal);
+		CASE(Punctuation_Equal_Equal);
 		CASE(Punctuation_Colon);
 		CASE(Punctuation_Plus);
 		CASE(Punctuation_Dash);
@@ -1022,7 +1055,8 @@ struct Token {
 
 			// punctuation
 			CASE(Punctuation_Bang, Unary);
-			CASE(Punctuation_Equal, Assignment);
+			CASE(Punctuation_Bang_Equal, Equality);
+			CASE(Punctuation_Equal_Equal, Equality);
 			CASE(Punctuation_Colon, Colon);
 			CASE(Punctuation_Plus, Term);
 			CASE(Punctuation_Dash, Term);
@@ -1102,7 +1136,9 @@ struct Token {
 		
 			// punctuation
 			CASE(Punctuation_Bang, "!");
+			CASE(Punctuation_Bang_Equal, "!=");
 			CASE(Punctuation_Equal, "=");
+			CASE(Punctuation_Equal_Equal, "==");
 			CASE(Punctuation_Colon, ":");
 			CASE(Punctuation_Plus, "+");
 			CASE(Punctuation_Dash, "-");
@@ -1158,9 +1194,18 @@ struct Tokenizer {
 		return next_char;
 	}
 
-	bool match_char(char32_t &actual, char32_t expected) {
+	bool next_char_if_eq(char32_t &actual, char32_t expected) {
 		if (actual == expected) {
 			actual = next_char();
+			return true;
+		}
+		return false;
+	}
+
+	bool match_char(char32_t expected, char32_t *opt_out_c = nullptr) {
+		if (peek_char() == expected) {
+			char32_t c = next_char();
+			if (opt_out_c) *opt_out_c = c;
 			return true;
 		}
 		return false;
@@ -1240,13 +1285,13 @@ struct Tokenizer {
 
 		if (c == '\0') {
 			previous_token = make_token(Token_Kind::Eof);
-		} else if (match_char(c, '\n')) {
+		} else if (next_char_if_eq(c, '\n')) {
 			previous_token = make_token(Token_Kind::Delimeter_Newline);
 			line++;
 			coloumn = 0;
-		} else if (match_char(c, '\'')) {
+		} else if (next_char_if_eq(c, '\'')) {
 			previous_token = try_(next_character_token());
-		} else if (match_char(c, '\"')) {
+		} else if (next_char_if_eq(c, '\"')) {
 			previous_token = next_string_token();
 		} else if (isdigit(c) || (c == '.' && isdigit(peek_char(1)))) {
 			previous_token = next_number_token();
@@ -1412,10 +1457,18 @@ struct Tokenizer {
 				token = make_token(Token_Kind::Delimeter_Right_Curly);
 			} break;
 			case '!': {
-				token = make_token(Token_Kind::Punctuation_Bang);
+				if (match_char('=')) {
+					token = make_token(Token_Kind::Punctuation_Bang_Equal);
+				} else {
+					token = make_token(Token_Kind::Punctuation_Bang);
+				}
 			} break;
 			case '=': {
-				token = make_token(Token_Kind::Punctuation_Equal);
+				if (match_char('=')) {
+					token = make_token(Token_Kind::Punctuation_Equal_Equal);
+				} else {
+					token = make_token(Token_Kind::Punctuation_Equal);
+				}
 			} break;
 			case ':': {
 				token = make_token(Token_Kind::Punctuation_Colon);
@@ -1433,14 +1486,14 @@ struct Tokenizer {
 				token = make_token(Token_Kind::Punctuation_Slash);
 			} break;
 			case '&': {
-				if (match_char(c, '&')) {
+				if (match_char('&')) {
 					token = make_token(Token_Kind::Punctuation_Ampersand_Ampersand);
 				} else {
 					todo("Implement `&` tokenization.");
 				}
 			} break;
 			case '|': {
-				if (match_char(c, '|')) {
+				if (match_char('|')) {
 					token = make_token(Token_Kind::Punctuation_Pipe_Pipe);
 				} else {
 					todo("Implement `|` tokenization.");
@@ -1591,8 +1644,8 @@ struct Parser {
 		auto expression = try_(parse_expression_or_assignment());
 
 		verify(expression->kind != AST_Kind::Binary_Assignment, expression->location, "Cannot assign in expression context.");
-		verify(expression->kind != AST_Kind::Binary_Variable_Instantiation, expression->location, "Cannot instantiate new variables in expression context.");
-		verify(expression->kind != AST_Kind::Binary_Constant_Instantiation, expression->location, "Cannot instantiate new constants in expression context.");
+		verify(expression->kind != AST_Kind::Variable_Instantiation, expression->location, "Cannot instantiate new variables in expression context.");
+		verify(expression->kind != AST_Kind::Constant_Instantiation, expression->location, "Cannot instantiate new constants in expression context.");
 		verify(expression->kind != AST_Kind::Binary_Variable_Declaration, expression->location, "Cannot declare new variables in expression context.");
 		
 		return expression;
@@ -1726,6 +1779,12 @@ struct Parser {
 			case Token_Kind::Punctuation_Colon:
 				node = try_(parse_colon(previous, location));
 				break;
+			case Token_Kind::Punctuation_Bang_Equal:
+				node = try_(parse_binary(AST_Kind::Binary_NE, precedence, previous, location));
+				break;
+			case Token_Kind::Punctuation_Equal_Equal:
+				node = try_(parse_binary(AST_Kind::Binary_EQ, precedence, previous, location));
+				break;
 			case Token_Kind::Punctuation_Equal:
 				node = try_(parse_binary(AST_Kind::Binary_Assignment, precedence, previous, location));
 				break;
@@ -1806,27 +1865,39 @@ struct Parser {
 		AST *node = nullptr;
 
 		if (match(Token_Kind::Punctuation_Equal)) {
-			auto rhs = try_(parse_expression());
+			auto initializer = try_(parse_expression());
 
-			AST_Binary *binary = new AST_Binary;
-			binary->kind = AST_Kind::Binary_Variable_Instantiation;
-			binary->location = location;
-			binary->lhs = previous;
-			binary->rhs = rhs;
+			AST_Variable_Instantiation *inst = new AST_Variable_Instantiation;
+			inst->kind = AST_Kind::Variable_Instantiation;
+			inst->location = location;
 
-			node = binary;
+			AST_Symbol *symbol = dynamic_cast<AST_Symbol *>(previous);
+			verify(symbol, previous->location, "Expected a symbol on the left hand side of variable instantiation.");
+			inst->symbol = symbol;
+
+			inst->initializer = initializer;
+
+			inst->specified_type = nullptr;
+
+			node = inst;
 		} else if (match(Token_Kind::Punctuation_Colon)) {
-			auto rhs = try_(parse_expression());
+			auto initializer = try_(parse_expression());
 
-			AST_Binary *binary = new AST_Binary;
-			binary->kind = AST_Kind::Binary_Constant_Instantiation;
-			binary->location = location;
-			binary->lhs = previous;    
-			binary->rhs = rhs;
+			AST_Variable_Instantiation *inst = new AST_Variable_Instantiation;
+			inst->kind = AST_Kind::Constant_Instantiation;
+			inst->location = location;
 
-			node = binary;
+			AST_Symbol *symbol = dynamic_cast<AST_Symbol *>(previous);
+			verify(symbol, previous->location, "Expected a symbol on the left hand side of constant declaration.");
+			inst->symbol = symbol;
+
+			inst->initializer = initializer;
+
+			inst->specified_type = nullptr;
+
+			node = inst;
 		} else {
-			todo("Variable declarations not yet implemented.");
+			todo("Variable declarations not yet implemented. previous.location = %s", tokenizer.current_location().debug_str().c_str());
 		}
 
 		return node;
@@ -1884,33 +1955,31 @@ struct Typechecker {
 		};
 
 		union {
-			::Type type;
+			::Type ty;
 			Function_Binding fn;
 			// ::Module *mod;
 		};
 
 		static Binding variable(::Type type) {
-			return Binding { 
-				.kind = Variable,
-				.type = type
-			};
+			Binding b;
+			b.kind = Variable;
+			b.ty = type;
+			return b;
 		}
 
 		static Binding type(::Type type) {
-			return Binding { 
-				.kind = Type, 
-				.type = type 
-			};
+			Binding b;
+			b.kind = Type;
+			b.ty = type;
+			return b;
 		}
 
 		static Binding function(PID pid, ::Type fn_type) {
-			return Binding { 
-				.kind = Function, 
-				.fn = { 
-					.pid = pid, 
-					.type = fn_type 
-				} 
-			};
+			Binding b;
+			b.kind = Function;
+			b.fn.pid = pid;
+			b.fn.type = fn_type;
+			return b;
 		}
 
 		/* @TODO:
@@ -1968,6 +2037,7 @@ struct Typechecker {
 	*/
 
 	Scope &current_scope() {
+		internal_verify(!scopes.empty(), "No scopes in `scopes` field of Typechecker!");
 		return scopes.front();
 	}
 
@@ -1976,6 +2046,7 @@ struct Typechecker {
 	}
 
 	void end_scope() {
+		internal_verify(!scopes.empty(), "No sopes in `scopes` field of Typechecker to pop!");
 		scopes.pop_front();
 	}
 
@@ -2019,15 +2090,15 @@ struct Typechecker {
 		return put_binding(location, id, Binding::variable(type));
 	}
 
-	Result<void> bind_type(Code_Location location, const std::string &id, Type type) {
-		internal_verify(type.kind == Type_Kind::Type, "Attempted to bind a type name to something other than a type! `%s` to `%s`", id.c_str(), type.debug_str().c_str());
-		return put_binding(location, id, Binding::type(type));
-	}
+	// Result<void> bind_type(Code_Location location, const std::string &id, Type type) {
+	// 	internal_verify(type.kind == Type_Kind::Type, "Attempted to bind a type name to something other than a type! `%s` to `%s`", id.c_str(), type.debug_str().c_str());
+	// 	return put_binding(location, id, Binding::type(type));
+	// }
 
-	Result<void> bind_function(Code_Location location, const std::string &id, PID pid, Type type) {
-		internal_verify(type.kind == Type_Kind::Function, "Attempted to bind a function name to something other than a function-type! `%s` to `%s`", id.c_str(), type.debug_str().c_str());
-		return put_binding(location, id, Binding::function(pid, type));
-	}
+	// Result<void> bind_function(Code_Location location, const std::string &id, PID pid, Type type) {
+	// 	internal_verify(type.kind == Type_Kind::Function, "Attempted to bind a function name to something other than a function-type! `%s` to `%s`", id.c_str(), type.debug_str().c_str());
+	// 	return put_binding(location, id, Binding::function(pid, type));
+	// }
 
 	/*
 	Result<void> bind_module(Code_Location location, const std::string &id, Module *module) {
@@ -2040,7 +2111,19 @@ struct Typechecker {
 
 		switch (node->kind) {
 			case AST_Kind::Symbol_Identifier: {
-				todo("typecheck identifiers!");
+				AST_Symbol *symbol = dynamic_cast<AST_Symbol *>(node);
+				internal_verify(symbol, "Failed to cast to `AST_Symbol *`");
+
+				auto opt_binding = find_binding_by_id(symbol->symbol.str());
+				verify(opt_binding.has_value(), "Unresolved identifier `%.*s`!", symbol->symbol.size, symbol->symbol.chars);
+				Binding binding = *opt_binding;
+
+				if (binding.kind != Binding::Variable) {
+					todo("Implement non-variable binding typechecking!");
+				}
+
+				symbol->type = binding.ty;
+				typechecked_node = symbol;
 			} break;
 
 			case AST_Kind::Literal_Null: {
@@ -2102,12 +2185,6 @@ struct Typechecker {
 				typechecked_node = unary;
 			} break;
 
-			case AST_Kind::Binary_Variable_Instantiation: {
-				todo("Not yet implemented!");
-			} break;
-			case AST_Kind::Binary_Constant_Instantiation: {
-				todo("Not yet implemented!");
-			} break;
 			case AST_Kind::Binary_Variable_Declaration: {
 				todo("Not yet implemented!");
 			} break;
@@ -2304,6 +2381,48 @@ struct Typechecker {
 				binary->type = binary->lhs->type;
 				typechecked_node = binary;
 			} break;
+			case AST_Kind::Binary_EQ: {
+				AST_Binary *binary = dynamic_cast<AST_Binary *>(node);
+				internal_verify(binary, "Failed to cast to `AST_Binary *`");
+
+				binary->lhs = try_(typecheck(binary->lhs));
+				binary->rhs = try_(typecheck(binary->rhs));
+
+				// @TODO:
+				// :TypeEquality
+				//
+				verify(
+					binary->lhs->type->kind == binary->rhs->type->kind,
+					binary->location,
+					"Type mismatch! `==` expects its arguments to be the same type! `%s` vs. `%s`.",
+					binary->lhs->type->display_str().c_str(),
+					binary->rhs->type->display_str().c_str()
+				);
+
+				binary->type = Type::Boolean();
+				typechecked_node = binary;
+			} break;
+			case AST_Kind::Binary_NE: {
+				AST_Binary *binary = dynamic_cast<AST_Binary *>(node);
+				internal_verify(binary, "Failed to cast to `AST_Binary *`");
+
+				binary->lhs = try_(typecheck(binary->lhs));
+				binary->rhs = try_(typecheck(binary->rhs));
+
+				// @TODO:
+				// :TypeEquality
+				//
+				verify(
+					binary->lhs->type->kind == binary->rhs->type->kind,
+					binary->location,
+					"Type mismatch! `!=` expects its arguments to be the same type! `%s` vs. `%s`.",
+					binary->lhs->type->display_str().c_str(),
+					binary->rhs->type->display_str().c_str()
+				);
+
+				binary->type = Type::Boolean();
+				typechecked_node = binary;
+			} break;
 
 			case AST_Kind::Block: {
 				AST_Block *block = dynamic_cast<AST_Block *>(node);
@@ -2315,6 +2434,30 @@ struct Typechecker {
 
 				block->type = Type { Type_Kind::No_Type };
 				typechecked_node = block;
+			} break;
+
+			case AST_Kind::Variable_Instantiation: {
+				AST_Variable_Instantiation *inst = dynamic_cast<AST_Variable_Instantiation *>(node);
+				internal_verify(inst, "Failed to cast to `AST_Variable_Instantiation *`");
+
+				AST_Symbol *symbol = inst->symbol;
+				symbol->type = Type { Type_Kind::No_Type };
+
+				Type inst_type;
+				if (inst->specified_type) {
+					todo("Implement typechecking for var-insts with specified_type.");
+				} else {
+					inst->initializer = try_(typecheck(inst->initializer));
+					inst_type = inst->initializer->type.value();
+				}
+
+				bind_variable(inst->location, symbol->symbol.str(), inst_type);
+
+				inst->type = Type { Type_Kind::No_Type };
+				typechecked_node = inst;
+			} break;
+			case AST_Kind::Constant_Instantiation: {
+				todo("Implement typechecking constant declaration!");
 			} break;
 
 			case AST_Kind::If: {
@@ -2337,16 +2480,28 @@ struct Typechecker {
 			} break;
 
 			default:
-				internal_error("Unhandled AST_Kind: %s!\n", debug_str(node->kind).c_str());
+				internal_error("Unhandled AST_Kind: %s!", debug_str(node->kind).c_str());
 		}
 
 		return typechecked_node;
 	}
 };
 
-Result<AST *> typecheck(AST *ast) {
+Result<AST_Block *> typecheck(AST_Block *ast) {
 	auto t = Typechecker {};
-	return t.typecheck(ast);
+
+	// @HACK:
+	// This won't be needed when we pass an `Interpreter` or something.
+	//
+	t.parent = nullptr;
+	t.begin_scope();
+	t.global_scope = &t.current_scope();
+	
+	for (size_t i = 0; i < ast->nodes.size(); i++) {
+		ast->nodes[i] = try_(t.typecheck(ast->nodes[i]));
+	}
+
+	return ast;
 }
 
 //

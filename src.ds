@@ -1,5 +1,13 @@
-if true || false {
-	"then-block"
+x := 5
+if x == 5 {
+	"TRUE!"
 } else {
-	"else-block"
+	"FALSE!"
+}
+
+X :: 5
+if X == 5 {
+	"CONST-TRUE!"
+} else {
+	"CONST-FALSE!"
 }
