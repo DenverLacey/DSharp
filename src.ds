@@ -1,13 +1,7 @@
 x := 5
-if x == 5 {
-	"TRUE!"
-} else {
-	"FALSE!"
+
+{
+	x := "This is a string now!"
 }
 
-X :: 5
-if X == 5 {
-	"CONST-TRUE!"
-} else {
-	"CONST-FALSE!"
-}
+x + 5

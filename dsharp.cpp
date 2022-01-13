@@ -565,6 +565,7 @@ enum class AST_Kind {
 
 	Binary_Variable_Declaration,
 	Binary_Assignment,
+	Binary_While,
 	Binary_Add,
 	Binary_Subtract,
 	Binary_Multiply,
@@ -596,6 +597,7 @@ std::string debug_str(AST_Kind kind) {
 		CASE(Unary_Negate);
 		CASE(Binary_Variable_Declaration);
 		CASE(Binary_Assignment);
+		CASE(Binary_While);
 		CASE(Binary_Add);
 		CASE(Binary_Subtract);
 		CASE(Binary_Multiply);
@@ -796,6 +798,7 @@ void AST::debug_print(size_t indentation) const {
 		
 		CASE_BINARY(Binary_Variable_Declaration);
 		CASE_BINARY(Binary_Assignment);
+		CASE_BINARY(Binary_While);
 		CASE_BINARY(Binary_Add);
 		CASE_BINARY(Binary_Subtract);
 		CASE_BINARY(Binary_Multiply);
@@ -964,6 +967,7 @@ enum class Token_Kind {
 	// keywords
 	Keyword_If,
 	Keyword_Else,
+	Keyword_While,
 };
 
 std::string debug_str(Token_Kind kind) {
@@ -1007,6 +1011,7 @@ std::string debug_str(Token_Kind kind) {
 		// keywords
 		CASE(Keyword_If);
 		CASE(Keyword_Else);
+		CASE(Keyword_While);
 
 		default:
 			return std::to_string(static_cast<int>(kind));
@@ -1056,6 +1061,7 @@ struct Token {
 			// punctuation
 			CASE(Punctuation_Bang, Unary);
 			CASE(Punctuation_Bang_Equal, Equality);
+			CASE(Punctuation_Equal, Assignment);
 			CASE(Punctuation_Equal_Equal, Equality);
 			CASE(Punctuation_Colon, Colon);
 			CASE(Punctuation_Plus, Term);
@@ -1068,6 +1074,7 @@ struct Token {
 			// keywords
 			CASE(Keyword_If, None);
 			CASE(Keyword_Else, None);
+			CASE(Keyword_While, None);
 
 			default:
 				internal_error("Unhandled Token_Kind: %s!", debug_str(kind).c_str());
@@ -1150,6 +1157,7 @@ struct Token {
 			// keywords
 			CASE(Keyword_If, "if");
 			CASE(Keyword_Else, "else");
+			CASE(Keyword_While, "while");
 
 			default:
 				internal_error("Unhandled Token_Kind: %s!\n", debug_str(kind).c_str());
@@ -1425,6 +1433,8 @@ struct Tokenizer {
 			token = make_token(Token_Kind::Keyword_If);
 		} else if (word == "else") {
 			token = make_token(Token_Kind::Keyword_Else);
+		} else if (word == "while") {
+			token = make_token(Token_Kind::Keyword_While);
 		} else {
 			token = make_token(
 				Token_Kind::Symbol_Identifier,
@@ -1601,6 +1611,8 @@ struct Parser {
 			node = try_(parse_block());
 		} else if (check(Token_Kind::Keyword_If)) {
 			node = try_(parse_if_statement());
+		} else if (check(Token_Kind::Keyword_While)) {
+			node = try_(parse_while_statement());
 		} else {
 			node = try_(parse_expression_or_assignment());
 			try_(expect_statement_terminator("Expected end of statement!"));
@@ -1632,6 +1644,22 @@ struct Parser {
 		node->condition = condition;
 		node->then_block = then_block;
 		node->else_block = else_block;
+
+		return node;
+	}
+
+	Result<AST_Binary *> parse_while_statement() {
+		auto location = try_(skip_expect(Token_Kind::Keyword_While, "Expected `while` statement!")).location;
+		skip_newlines();
+
+		auto condition = try_(parse_expression());
+		auto body = try_(parse_block());
+
+		AST_Binary *node = new AST_Binary;
+		node->kind = AST_Kind::Binary_While;
+		node->location = location;
+		node->lhs = condition;
+		node->rhs = body;
 
 		return node;
 	}
@@ -2203,6 +2231,18 @@ struct Typechecker {
 				binary->type = Type { Type_Kind::No_Type };
 				typechecked_node = binary;
 			} break;
+			case AST_Kind::Binary_While: {
+				AST_Binary *binary = dynamic_cast<AST_Binary *>(node);
+				internal_verify(binary, "Failed to cast to `AST_Binary *`");
+
+				binary->lhs = try_(typecheck(binary->lhs));
+				verify(binary->lhs->type->kind == Type_Kind::Boolean, binary->lhs->location, "Type mismatch! Expected boolean expression as condition to `while` statement.");
+
+				binary->rhs = try_(typecheck(binary->rhs));
+
+				binary->type = Type { Type_Kind::No_Type };
+				typechecked_node = binary;
+			} break;
 			case AST_Kind::Binary_Add: {
 				AST_Binary *binary = dynamic_cast<AST_Binary*>(node);
 				internal_verify(binary, "Failed to cast to `AST_Binary *`");
@@ -2428,9 +2468,11 @@ struct Typechecker {
 				AST_Block *block = dynamic_cast<AST_Block *>(node);
 				internal_verify(block, "Failed to cast to `AST_Block *`");
 
+				begin_scope();
 				for (size_t i = 0; i < block->nodes.size(); i++) {
 					block->nodes[i] = try_(typecheck(block->nodes[i]));
 				}
+				end_scope();
 
 				block->type = Type { Type_Kind::No_Type };
 				typechecked_node = block;
