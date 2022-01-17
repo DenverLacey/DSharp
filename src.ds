@@ -1,7 +1,3 @@
-x := 5
-
-{
-	x := "This is a string now!"
+add :: fn(a: i32, b: i32) -> i32 {
+	a + b
 }
-
-x + 5

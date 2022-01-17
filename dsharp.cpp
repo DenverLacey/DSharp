@@ -22,6 +22,8 @@
 //		Implement proper equality checks for `Type`s.
 // - CalculateNumericSize
 //		Calculate floating point literals required size to determine int type.
+// - ImplementParseTypeSignature
+//		Implement proper `parse_type_signature()` function for `Parser`.
 //
 //
 
@@ -576,9 +578,11 @@ enum class AST_Kind {
 	Binary_NE,
 
 	Block,
+	Block_Comma,
 
 	Variable_Instantiation,
 	Constant_Instantiation,
+	Function_Declaration,
 	If,
 };
 
@@ -607,8 +611,10 @@ std::string debug_str(AST_Kind kind) {
 		CASE(Binary_EQ);
 		CASE(Binary_NE);
 		CASE(Block);
+		CASE(Block_Comma);
 		CASE(Variable_Instantiation);
 		CASE(Constant_Instantiation);
+		CASE(Function_Declaration);
 		CASE(If);
 
 		default:
@@ -671,6 +677,10 @@ struct AST_Block : AST {
 	std::vector<AST *> nodes;
 };
 
+struct AST_Type_Signature : AST {
+	Type value_type;
+};
+
 struct AST_If : AST {
 	AST *condition;
 	AST *then_block;
@@ -679,12 +689,18 @@ struct AST_If : AST {
 
 struct AST_Variable_Instantiation : AST {
 	AST_Symbol *symbol;
-	struct AST_Type_Signature *specified_type; // optional
+	AST_Type_Signature *specified_type_signature; // optional
 	AST *initializer;
 };
 
-struct AST_Type_Signature : AST {
-	Type value_type;
+struct AST_Function_Declaration : AST {
+	AST_Block *parameters;
+	// @TODO:
+	// :ImplementParseTypeSignature
+	// AST_Type_Signature *return_type_signature; // optional
+	//
+	AST *return_type_signature; // optional
+	AST_Block *body;
 };
 
 void AST::debug_print(size_t indentation) const {
@@ -809,6 +825,7 @@ void AST::debug_print(size_t indentation) const {
 		CASE_BINARY(Binary_NE);
 
 		CASE_BLOCK(Block);
+		CASE_BLOCK(Block_Comma);
 
 		case AST_Kind::Variable_Instantiation:
 		case AST_Kind::Constant_Instantiation: {
@@ -819,8 +836,19 @@ void AST::debug_print(size_t indentation) const {
 			print_base_members(indentation);
 
 			print_member("symbol", indentation, self->symbol);
-			if (self->specified_type) print_member("type", indentation, self->specified_type);
+			if (self->specified_type_signature) print_member("type", indentation, self->specified_type_signature);
 			print_member("initializer", indentation, self->initializer);
+		} break;
+		case AST_Kind::Function_Declaration: {
+			const AST_Function_Declaration *self = dynamic_cast<const AST_Function_Declaration *>(this);
+			internal_verify(self, "Failed to cast to `const AST_Function_Declaration *`");
+
+			printf("`%s`:\n", debug_str(kind).c_str());
+			print_base_members(indentation);
+
+			print_member("parameters", indentation, self->parameters);
+			if (self->return_type_signature) print_member("return", indentation, self->return_type_signature);
+			print_member("body", indentation, self->body);
 		} break;
 		case AST_Kind::If: {
 			const AST_If *self = dynamic_cast<const AST_If *>(this);
@@ -946,6 +974,7 @@ enum class Token_Kind {
 	// delimeters
 	Delimeter_Newline,
 	Delimeter_Semicolon,
+	Delimeter_Comma,
 	Delimeter_Left_Parenthesis,
 	Delimeter_Right_Parenthesis,
 	Delimeter_Left_Curly,
@@ -963,11 +992,13 @@ enum class Token_Kind {
 	Punctuation_Slash,
 	Punctuation_Ampersand_Ampersand,
 	Punctuation_Pipe_Pipe,
+	Punctuation_Right_Thin_Arrow,
 
 	// keywords
 	Keyword_If,
 	Keyword_Else,
 	Keyword_While,
+	Keyword_Fn,
 };
 
 std::string debug_str(Token_Kind kind) {
@@ -990,6 +1021,7 @@ std::string debug_str(Token_Kind kind) {
 		// delimeters
 		CASE(Delimeter_Newline);
 		CASE(Delimeter_Semicolon);
+		CASE(Delimeter_Comma);
 		CASE(Delimeter_Left_Parenthesis);
 		CASE(Delimeter_Right_Parenthesis);
 		CASE(Delimeter_Left_Curly);
@@ -1007,11 +1039,13 @@ std::string debug_str(Token_Kind kind) {
 		CASE(Punctuation_Slash);
 		CASE(Punctuation_Ampersand_Ampersand);
 		CASE(Punctuation_Pipe_Pipe);
+		CASE(Punctuation_Right_Thin_Arrow);
 
 		// keywords
 		CASE(Keyword_If);
 		CASE(Keyword_Else);
 		CASE(Keyword_While);
+		CASE(Keyword_Fn);
 
 		default:
 			return std::to_string(static_cast<int>(kind));
@@ -1053,6 +1087,7 @@ struct Token {
 			// delimeters
 			CASE(Delimeter_Newline, None);
 			CASE(Delimeter_Semicolon, None);
+			CASE(Delimeter_Comma, None);
 			CASE(Delimeter_Left_Parenthesis, Call);
 			CASE(Delimeter_Right_Parenthesis, None);
 			CASE(Delimeter_Left_Curly, None);
@@ -1075,6 +1110,7 @@ struct Token {
 			CASE(Keyword_If, None);
 			CASE(Keyword_Else, None);
 			CASE(Keyword_While, None);
+			CASE(Keyword_Fn, None);
 
 			default:
 				internal_error("Unhandled Token_Kind: %s!", debug_str(kind).c_str());
@@ -1136,6 +1172,7 @@ struct Token {
 			// delimeters
 			CASE(Delimeter_Newline, "new-line");
 			CASE(Delimeter_Semicolon, ";");
+			CASE(Delimeter_Comma, ",");
 			CASE(Delimeter_Left_Parenthesis, "(");
 			CASE(Delimeter_Right_Parenthesis, ")");
 			CASE(Delimeter_Left_Curly, "{");
@@ -1153,11 +1190,13 @@ struct Token {
 			CASE(Punctuation_Slash, "/");
 			CASE(Punctuation_Ampersand_Ampersand, "&&");
 			CASE(Punctuation_Pipe_Pipe, "||");
+			CASE(Punctuation_Right_Thin_Arrow, "->");
 		
 			// keywords
 			CASE(Keyword_If, "if");
 			CASE(Keyword_Else, "else");
 			CASE(Keyword_While, "while");
+			CASE(Keyword_Fn, "fn");
 
 			default:
 				internal_error("Unhandled Token_Kind: %s!\n", debug_str(kind).c_str());
@@ -1167,9 +1206,6 @@ struct Token {
 	}
 };
 
-// @TODO:
-// :FixLocations
-//
 struct Tokenizer {
 	size_t line = 0;
 	size_t coloumn = 0;
@@ -1435,6 +1471,8 @@ struct Tokenizer {
 			token = make_token(Token_Kind::Keyword_Else);
 		} else if (word == "while") {
 			token = make_token(Token_Kind::Keyword_While);
+		} else if (word == "fn") {
+			token = make_token(Token_Kind::Keyword_Fn);
 		} else {
 			token = make_token(
 				Token_Kind::Symbol_Identifier,
@@ -1453,6 +1491,9 @@ struct Tokenizer {
 		switch (c) {
 			case ';': {
 				token = make_token(Token_Kind::Delimeter_Semicolon);
+			} break;
+			case ',': {
+				token = make_token(Token_Kind::Delimeter_Comma);
 			} break;
 			case '(': {
 				token = make_token(Token_Kind::Delimeter_Left_Parenthesis);
@@ -1487,7 +1528,11 @@ struct Tokenizer {
 				token = make_token(Token_Kind::Punctuation_Plus);
 			} break;
 			case '-': {
-				token = make_token(Token_Kind::Punctuation_Dash);
+				if (match_char('>')) {
+					token = make_token(Token_Kind::Punctuation_Right_Thin_Arrow);
+				} else {
+					token = make_token(Token_Kind::Punctuation_Dash);
+				}
 			} break;
 			case '*': {
 				token = make_token(Token_Kind::Punctuation_Star);
@@ -1790,6 +1835,10 @@ struct Parser {
 					node = try_(parse_unary(AST_Kind::Unary_Negate, location));
 				}
 				break;
+			
+			case Token_Kind::Keyword_Fn:
+				node = try_(parse_function(token));
+				break;
 
 			default:
 				error(location, "`%s` is not a prefix operation!", token.display_str().c_str());
@@ -1905,7 +1954,7 @@ struct Parser {
 
 			inst->initializer = initializer;
 
-			inst->specified_type = nullptr;
+			inst->specified_type_signature = nullptr;
 
 			node = inst;
 		} else if (match(Token_Kind::Punctuation_Colon)) {
@@ -1921,7 +1970,7 @@ struct Parser {
 
 			inst->initializer = initializer;
 
-			inst->specified_type = nullptr;
+			inst->specified_type_signature = nullptr;
 
 			node = inst;
 		} else {
@@ -1929,6 +1978,84 @@ struct Parser {
 		}
 
 		return node;
+	}
+
+	Result<AST *> parse_function(Token fn_token) {
+		try_(skip_expect(Token_Kind::Delimeter_Left_Parenthesis, "Expected `(` after `fn` keyword."));
+
+		// @NOTE:
+		// @TODO:
+		// Should this be factored out into some sort of `parse_comma_separated_expressions()`?
+		//
+		AST_Block *parameters = new AST_Block;
+		parameters->kind = AST_Kind::Block_Comma;
+		parameters->location = tokenizer.current_location();
+
+		do {
+			if (skip_check(Token_Kind::Delimeter_Right_Parenthesis)) break;
+			Token param_token = try_(skip_expect(Token_Kind::Symbol_Identifier, "Expected either `)` or parameter name."));
+			
+			Code_Location param_location = try_(skip_expect(Token_Kind::Punctuation_Colon, "Expected `:` after parameter name.")).location;
+
+			// @TODO:
+			// :ImplementParseTypeSignature
+			//
+			Token type_token = try_(skip_expect(Token_Kind::Symbol_Identifier, "Expected type name for parameter."));
+
+			AST_Symbol *param_ident = new AST_Symbol;
+			param_ident->kind = AST_Kind::Symbol_Identifier;
+			param_ident->location = param_token.location;
+			// @TODO:
+			// :HandleStringData
+			//
+			param_ident->symbol = param_token.data.string;
+
+			AST_Symbol *type_ident = new AST_Symbol;
+			type_ident->kind = AST_Kind::Symbol_Identifier;
+			type_ident->location = type_token.location;
+			// @TODO:
+			// :HandleStringData
+			//
+			type_ident->symbol = type_token.data.string;
+
+			AST_Binary *param_node = new AST_Binary;
+			param_node->kind = AST_Kind::Binary_Variable_Declaration;
+			param_node->location = param_location;
+			param_node->lhs = param_ident;
+			param_node->rhs = type_ident;
+
+			parameters->nodes.push_back(param_node);
+		} while (skip_match(Token_Kind::Delimeter_Comma) || check(Token_Kind::Eof));
+
+		try_(expect(Token_Kind::Delimeter_Right_Parenthesis, "Expected `)` to terminate parameter list."));
+
+		AST *return_type = nullptr;
+		if (skip_match(Token_Kind::Punctuation_Right_Thin_Arrow)) {
+			// @TODO:
+			// :ImplementParseTypeSignature
+			//
+			Token type_token = try_(skip_expect(Token_Kind::Symbol_Identifier, "Expected type name for parameter."));
+			AST_Symbol *type_ident = new AST_Symbol;
+			type_ident->kind = AST_Kind::Symbol_Identifier;
+			type_ident->location = type_token.location;
+			// @TODO:
+			// :HandleStringData
+			//
+			type_ident->symbol = type_token.data.string;
+
+			return_type = type_ident;
+		}
+
+		AST_Block *body = try_(parse_block());
+
+		AST_Function_Declaration *decl = new AST_Function_Declaration;
+		decl->kind = AST_Kind::Function_Declaration;
+		decl->location = fn_token.location;
+		decl->parameters = parameters;
+		decl->return_type_signature = return_type;
+		decl->body = body;
+
+		return decl;
 	}
 };
 
@@ -2236,7 +2363,7 @@ struct Typechecker {
 				internal_verify(binary, "Failed to cast to `AST_Binary *`");
 
 				binary->lhs = try_(typecheck(binary->lhs));
-				verify(binary->lhs->type->kind == Type_Kind::Boolean, binary->lhs->location, "Type mismatch! Expected boolean expression as condition to `while` statement.");
+				verify(binary->lhs->type->kind == Type_Kind::Boolean, binary->lhs->location, "Type mismatch! Expected boolean expression as condition to `while` statement but found `%s`.", binary->lhs->type->display_str().c_str());
 
 				binary->rhs = try_(typecheck(binary->rhs));
 
@@ -2486,8 +2613,8 @@ struct Typechecker {
 				symbol->type = Type { Type_Kind::No_Type };
 
 				Type inst_type;
-				if (inst->specified_type) {
-					todo("Implement typechecking for var-insts with specified_type.");
+				if (inst->specified_type_signature) {
+					todo("Implement typechecking for var-insts with specified_type_signature.");
 				} else {
 					inst->initializer = try_(typecheck(inst->initializer));
 					inst_type = inst->initializer->type.value();
