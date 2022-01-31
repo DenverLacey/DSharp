@@ -1281,12 +1281,14 @@ struct Tokenizer {
 	char32_t skip_to_begining_of_next_token() {
 		char c = peek_char();
 
-		while (is_whitespace(c)) {
+		while (is_whitespace(c) || c == '/') {
 			if (c == '/' && peek_char(1) == '/') {
 				while (c != '\n') {
 					next_char();
 					c = peek_char();
 				}
+				line++;
+				coloumn = 0;
 			}
 
 			if (c == '\n' && previous_token.kind == Token_Kind::Delimeter_Newline) {
